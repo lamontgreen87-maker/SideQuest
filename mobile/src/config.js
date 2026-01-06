@@ -1,6 +1,7 @@
 export const APP_VERSION = "0.1.5";
 
-export const DEFAULT_SERVER_URL = "http://192.168.1.208:8000";
+export const DEFAULT_SERVER_URL =
+  "https://seq-housing-sunshine-hispanic.trycloudflare.com";
 export const GIST_CONFIG_URL =
   "https://gist.githubusercontent.com/lamontgreen87-maker/ad3e3e7abcf09f755a5087aaa15a5bd1/raw/config.json";
 
