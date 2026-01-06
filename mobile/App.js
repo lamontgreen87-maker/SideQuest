@@ -5,6 +5,7 @@ import { WalletConnectModal, useWalletConnectModal } from "@walletconnect/modal-
 import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import PlaceholderScreen from "./src/screens/PlaceholderScreen";
+import StoryScreen from "./src/screens/StoryScreen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
   APP_VERSION,
@@ -221,12 +222,7 @@ export default function App() {
   const activeContent = useMemo(() => {
     switch (activeTab) {
       case "story":
-        return (
-          <PlaceholderScreen
-            title="Story"
-            detail="Chat and combat stream will land in the next pass."
-          />
-        );
+        return <StoryScreen serverUrl={serverUrl} onCreditsUpdate={setCredits} />;
       case "checks":
         return (
           <PlaceholderScreen
