@@ -7,6 +7,7 @@ import HomeScreen from "./src/screens/HomeScreen";
 import PlaceholderScreen from "./src/screens/PlaceholderScreen";
 import ChecksScreen from "./src/screens/ChecksScreen";
 import BestiaryScreen from "./src/screens/BestiaryScreen";
+import SpellsScreen from "./src/screens/SpellsScreen";
 import StoryScreen from "./src/screens/StoryScreen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
@@ -228,12 +229,7 @@ export default function App() {
       case "checks":
         return <ChecksScreen serverUrl={serverUrl} />;
       case "spells":
-        return (
-          <PlaceholderScreen
-            title="Spells"
-            detail="Spell list and casting UI will load here."
-          />
-        );
+        return <SpellsScreen serverUrl={serverUrl} />;
       case "bestiary":
         return <BestiaryScreen serverUrl={serverUrl} />;
       case "character":
