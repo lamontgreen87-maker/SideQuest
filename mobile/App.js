@@ -8,6 +8,7 @@ import PlaceholderScreen from "./src/screens/PlaceholderScreen";
 import ChecksScreen from "./src/screens/ChecksScreen";
 import BestiaryScreen from "./src/screens/BestiaryScreen";
 import SpellsScreen from "./src/screens/SpellsScreen";
+import CharacterScreen from "./src/screens/CharacterScreen";
 import StoryScreen from "./src/screens/StoryScreen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
@@ -233,12 +234,7 @@ export default function App() {
       case "bestiary":
         return <BestiaryScreen serverUrl={serverUrl} />;
       case "character":
-        return (
-          <PlaceholderScreen
-            title="Character"
-            detail="Character creation and sheet editing will load here."
-          />
-        );
+        return <CharacterScreen serverUrl={serverUrl} />;
       case "settings":
         return (
           <PlaceholderScreen
