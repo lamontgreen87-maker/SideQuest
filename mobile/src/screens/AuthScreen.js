@@ -1,0 +1,143 @@
+import React from "react";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
+import Button from "../components/Button";
+import Field from "../components/Field";
+import Section from "../components/Section";
+import Screen from "../components/Screen";
+import { colors, spacing } from "../theme";
+
+export default function AuthScreen({
+  serverUrl,
+  setServerUrl,
+  onSaveServerUrl,
+  onRefreshServerUrl,
+  walletStatus,
+  walletAddress,
+  walletConnected,
+  onOpenWallet,
+  authStatus,
+  onSignIn,
+  onDisconnect,
+  updateStatus,
+}) {
+  const isBusy = authStatus?.loading;
+  const connectedAddress = walletStatus?.address || walletAddress;
+
+  return (
+    <Screen>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.title}>Side Quest</Text>
+        <Text style={styles.subtitle}>Connect your wallet to continue.</Text>
+
+        <Section title="Server">
+          <Field
+            label="Server URL"
+            value={serverUrl}
+            onChangeText={setServerUrl}
+            placeholder="https://your-server.com"
+          />
+          <View style={styles.row}>
+            <Button
+              label="Save"
+              onPress={onSaveServerUrl}
+              disabled={!serverUrl}
+            />
+            <Button
+              label="Check Gist"
+              onPress={onRefreshServerUrl}
+              variant="ghost"
+            />
+          </View>
+          {walletStatus?.health ? (
+            <Text style={styles.statusOk}>Server: {walletStatus.health}</Text>
+          ) : null}
+          {walletStatus?.healthError ? (
+            <Text style={styles.statusError}>{walletStatus.healthError}</Text>
+          ) : null}
+        </Section>
+
+        <Section title="Wallet">
+          <View style={styles.row}>
+            <Button
+              label={walletConnected ? "Wallet Connected" : "Connect Wallet"}
+              onPress={onOpenWallet}
+              disabled={walletConnected}
+            />
+            <Button label="Disconnect" onPress={onDisconnect} variant="ghost" />
+          </View>
+          <Text style={styles.statusMuted}>
+            {connectedAddress ? `Wallet: ${connectedAddress}` : "No wallet connected"}
+          </Text>
+          <View style={styles.row}>
+            <Button
+              label={isBusy ? "Signing In..." : "Sign In"}
+              onPress={onSignIn}
+              disabled={!connectedAddress || isBusy}
+            />
+          </View>
+          {authStatus?.error ? (
+            <Text style={styles.statusError}>{authStatus.error}</Text>
+          ) : null}
+        </Section>
+
+        <Section title="Updates">
+          {updateStatus?.available ? (
+            <Text style={styles.statusWarn}>
+              New version {updateStatus.latestVersion} available.
+            </Text>
+          ) : (
+            <Text style={styles.statusMuted}>
+              {updateStatus?.message || "Up to date."}
+            </Text>
+          )}
+          {updateStatus?.url ? (
+            <Button
+              label="Open Release"
+              onPress={() => Linking.openURL(updateStatus.url)}
+              variant="ghost"
+            />
+          ) : null}
+        </Section>
+      </ScrollView>
+    </Screen>
+  );
+}
+
+const styles = StyleSheet.create({
+  content: {
+    padding: spacing.lg,
+    gap: spacing.lg,
+  },
+  title: {
+    color: colors.parchment,
+    fontSize: 30,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
+  subtitle: {
+    color: colors.mutedGold,
+    marginTop: -8,
+  },
+  row: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    flexWrap: "wrap",
+    marginBottom: spacing.sm,
+  },
+  statusOk: {
+    color: colors.success,
+    fontSize: 12,
+  },
+  statusError: {
+    color: colors.accent,
+    fontSize: 12,
+  },
+  statusWarn: {
+    color: colors.warning,
+    fontSize: 12,
+  },
+  statusMuted: {
+    color: colors.mutedGold,
+    fontSize: 12,
+  },
+});

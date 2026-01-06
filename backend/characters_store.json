@@ -1,0 +1,396 @@
+{
+  "characters": {
+    "ba125738-48ac-4cf7-b799-8257638814e0": {
+      "name": "Bob",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Greatclub",
+          "attack_ability": "str",
+          "damage": "1d8+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "b61d836e-490c-48e5-b3a3-4af198e01ce4": {
+      "name": "Tir",
+      "class": "Sorcerer",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Quarterstaff",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "369dc055-3947-4f7b-88ad-eb79a339a888": {
+      "name": "Bard",
+      "class": "Bard",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Mace",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "3cebeabc-9b11-44ff-9734-ae1e8c0a196a": {
+      "name": "Bard",
+      "class": "Bard",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Mace",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "3aed24f2-098f-4201-93d1-6b071da9ae01": {
+      "name": "Beau",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Mace",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "a94760b2-0b89-4934-8ae8-5eba5f8dbe14": {
+      "name": "Beau",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Mace",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "949b9994-3ddf-4bce-bbc6-6a3c0821b91c": {
+      "name": "Topson",
+      "class": "Wizard",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Quarterstaff",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "8145c5f9-c1f3-40b7-9c72-b166189a7aaf": {
+      "name": "Grot",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Club",
+          "attack_ability": "str",
+          "damage": "1d4+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "4987df09-4927-43c6-9392-94a3563c67ab": {
+      "name": "Fgjgf",
+      "class": "Monk",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Quarterstaff",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "53f35e53-9585-48ca-9ad8-8d36e0def10d": {
+      "name": "Tom",
+      "class": "Monk",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Quarterstaff",
+          "attack_ability": "str",
+          "damage": "1d6+0",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "a54926e9-9205-4bc6-b990-3b76c5e1d8ce": {
+      "name": "Hdjdj",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 10,
+        "dex": 10,
+        "con": 10,
+        "int": 10,
+        "wis": 10,
+        "cha": 10
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+0",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "aafb0a44-28bd-42bc-9a61-ca8b3960acee": {
+      "name": "Sam",
+      "class": "Ranger",
+      "level": 1,
+      "stats": {
+        "str": 10,
+        "dex": 10,
+        "con": 10,
+        "int": 10,
+        "wis": 10,
+        "cha": 10
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Light Crossbow",
+          "attack_ability": "dex",
+          "damage": "1d8+0",
+          "damage_type": "piercing",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "f189e6b8-a560-4790-adb0-2cc272cb5ba8": {
+      "name": "Axe",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Light Crossbow",
+          "attack_ability": "dex",
+          "damage": "1d8+0",
+          "damage_type": "piercing",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "049de0ca-b135-4150-a304-0e686f67a1dd": {
+      "name": "Axe",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 15,
+        "dex": 14,
+        "con": 13,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Light Crossbow",
+          "attack_ability": "dex",
+          "damage": "1d8+0",
+          "damage_type": "piercing",
+          "finesse": false
+        }
+      ],
+      "conditions": [],
+      "items": []
+    }
+  }
+}

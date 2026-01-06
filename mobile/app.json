@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Side Quest",
+    "slug": "dungeon-crawler",
+    "version": "0.1.5",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "sidequest",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "com.anonymous.dungeoncrawler",
+      "label": "Side Quest",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "sidequest"
+            }
+          ]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}
