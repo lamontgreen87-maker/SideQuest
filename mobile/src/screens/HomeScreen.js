@@ -1,5 +1,5 @@
 import React from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Screen from "../components/Screen";
 import { colors, radius, spacing } from "../theme";
 
@@ -24,13 +24,18 @@ export default function HomeScreen({
         {tabs.map((tab) => {
           const isActive = tab.id === activeTab;
           return (
-            <Text
+            <Pressable
               key={tab.id}
-              style={[styles.tab, isActive && styles.tabActive]}
               onPress={() => onTabChange(tab.id)}
+              style={[styles.tab, isActive && styles.tabActive]}
             >
-              {tab.label}
-            </Text>
+              <Text
+                style={[styles.tabText, isActive && styles.tabTextActive]}
+                numberOfLines={1}
+              >
+                {tab.label}
+              </Text>
+            </Pressable>
           );
         })}
       </ScrollView>
@@ -58,20 +63,25 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   tab: {
-    color: colors.mutedGold,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
     borderRadius: radius.pill,
-    fontSize: 12,
-    letterSpacing: 1,
-    textTransform: "uppercase",
+    maxWidth: 120,
   },
   tabActive: {
     backgroundColor: colors.gold,
-    color: colors.ink,
     borderColor: colors.gold,
+  },
+  tabText: {
+    color: colors.mutedGold,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+  tabTextActive: {
+    color: colors.ink,
   },
   body: {
     flex: 1,
