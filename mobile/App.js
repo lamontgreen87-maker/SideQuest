@@ -226,7 +226,13 @@ export default function App() {
   const activeContent = useMemo(() => {
     switch (activeTab) {
       case "story":
-        return <StoryScreen serverUrl={serverUrl} onCreditsUpdate={setCredits} />;
+        return (
+          <StoryScreen
+            serverUrl={serverUrl}
+            onCreditsUpdate={setCredits}
+            onNavigate={setActiveTab}
+          />
+        );
       case "checks":
         return <ChecksScreen serverUrl={serverUrl} />;
       case "spells":
