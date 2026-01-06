@@ -5,6 +5,7 @@ import { WalletConnectModal, useWalletConnectModal } from "@walletconnect/modal-
 import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import PlaceholderScreen from "./src/screens/PlaceholderScreen";
+import ChecksScreen from "./src/screens/ChecksScreen";
 import StoryScreen from "./src/screens/StoryScreen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
@@ -224,12 +225,7 @@ export default function App() {
       case "story":
         return <StoryScreen serverUrl={serverUrl} onCreditsUpdate={setCredits} />;
       case "checks":
-        return (
-          <PlaceholderScreen
-            title="Checks & Saves"
-            detail="Skill checks, DC control, and saving throws will load here."
-          />
-        );
+        return <ChecksScreen serverUrl={serverUrl} />;
       case "spells":
         return (
           <PlaceholderScreen
