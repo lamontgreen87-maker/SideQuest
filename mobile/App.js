@@ -41,6 +41,16 @@ function compareVersions(a, b) {
   return 0;
 }
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out`));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export default function App() {
   const [fontsLoaded] = useFonts({
     Cinzel_400Regular,
@@ -180,18 +190,25 @@ export default function App() {
     }
     setAuthStatus({ loading: true, error: null });
     try {
-      const noncePayload = await apiPost(serverUrl, "/api/auth/wallet/nonce", {
-        address,
-      });
+      const noncePayload = await withTimeout(
+        apiPost(serverUrl, "/api/auth/wallet/nonce", { address }),
+        15000,
+        "Nonce request"
+      );
       const message = noncePayload.message;
-      const signature = await provider.request({
-        method: "personal_sign",
-        params: [message, address],
-      });
-      const authPayload = await apiPost(serverUrl, "/api/auth/wallet/verify", {
-        address,
-        signature,
-      });
+      const signature = await withTimeout(
+        provider.request({
+          method: "personal_sign",
+          params: [message, address],
+        }),
+        20000,
+        "Wallet signature"
+      );
+      const authPayload = await withTimeout(
+        apiPost(serverUrl, "/api/auth/wallet/verify", { address, signature }),
+        15000,
+        "Verify request"
+      );
       await setItem(STORAGE_KEYS.authToken, authPayload.token);
       await setItem(STORAGE_KEYS.authWallet, authPayload.wallet || address);
       setToken(authPayload.token);
@@ -199,7 +216,10 @@ export default function App() {
       setCredits(authPayload.credits || 0);
       setAuthStatus({ loading: false, error: null });
     } catch (error) {
-      setAuthStatus({ loading: false, error: "Wallet sign-in failed." });
+      setAuthStatus({
+        loading: false,
+        error: error?.message || "Wallet sign-in failed.",
+      });
     }
   }, [address, provider, serverUrl]);
 
