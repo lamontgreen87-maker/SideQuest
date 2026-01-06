@@ -6,6 +6,7 @@ import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import PlaceholderScreen from "./src/screens/PlaceholderScreen";
 import ChecksScreen from "./src/screens/ChecksScreen";
+import BestiaryScreen from "./src/screens/BestiaryScreen";
 import StoryScreen from "./src/screens/StoryScreen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
@@ -234,12 +235,7 @@ export default function App() {
           />
         );
       case "bestiary":
-        return (
-          <PlaceholderScreen
-            title="Bestiary"
-            detail="Monster list and detail sheets will load here."
-          />
-        );
+        return <BestiaryScreen serverUrl={serverUrl} />;
       case "character":
         return (
           <PlaceholderScreen
