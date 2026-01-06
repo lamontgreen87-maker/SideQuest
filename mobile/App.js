@@ -9,6 +9,7 @@ import ChecksScreen from "./src/screens/ChecksScreen";
 import BestiaryScreen from "./src/screens/BestiaryScreen";
 import SpellsScreen from "./src/screens/SpellsScreen";
 import CharacterScreen from "./src/screens/CharacterScreen";
+import SettingsScreen from "./src/screens/SettingsScreen";
 import StoryScreen from "./src/screens/StoryScreen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
@@ -243,9 +244,14 @@ export default function App() {
         return <CharacterScreen serverUrl={serverUrl} />;
       case "settings":
         return (
-          <PlaceholderScreen
-            title="Settings"
-            detail="Version, server, and account tools live here."
+          <SettingsScreen
+            serverUrl={serverUrl}
+            setServerUrl={setServerUrl}
+            onSaveServerUrl={saveServerUrl}
+            onRefreshServerUrl={refreshServerUrl}
+            updateStatus={updateStatus}
+            onSignOut={disconnectWallet}
+            credits={credits}
           />
         );
       default:
