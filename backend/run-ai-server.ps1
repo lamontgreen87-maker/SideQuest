@@ -15,6 +15,23 @@ if (-not $env:PAYMENT_CONFIRMATIONS) { $env:PAYMENT_CONFIRMATIONS = "1" }
 if (-not $env:PAYMENT_MAX_BLOCK_RANGE) { $env:PAYMENT_MAX_BLOCK_RANGE = "100" }
 if (-not $env:STARTING_CREDITS) { $env:STARTING_CREDITS = "25" }
 
+$cloudflaredConfigPath = Join-Path $env:USERPROFILE ".cloudflared\config.yml"
+$tunnelName = $env:CLOUDFLARE_TUNNEL_NAME
+$tunnelHostname = $env:CLOUDFLARE_TUNNEL_HOSTNAME
+if ((-not $tunnelName -or -not $tunnelHostname) -and (Test-Path $cloudflaredConfigPath)) {
+    $configText = Get-Content -Path $cloudflaredConfigPath -Raw
+    if (-not $tunnelName) {
+        $match = [regex]::Match($configText, "(?m)^\s*tunnel:\s*(\S+)")
+        if ($match.Success) { $tunnelName = $match.Groups[1].Value }
+    }
+    if (-not $tunnelHostname) {
+        $match = [regex]::Match($configText, "(?m)^\s*-\s*hostname:\s*(\S+)")
+        if ($match.Success) { $tunnelHostname = $match.Groups[1].Value }
+    }
+}
+if (-not $tunnelName) { $tunnelName = "sidequestai" }
+if (-not $tunnelHostname) { $tunnelHostname = "sidequestai.org" }
+
 $gistIdPath = Join-Path $PSScriptRoot "gist_id.txt"
 $gistTokenPath = Join-Path $PSScriptRoot "gist_token.txt"
 if (-not $env:GITHUB_GIST_ID -and (Test-Path $gistIdPath)) {
@@ -24,33 +41,58 @@ if (-not $env:GITHUB_TOKEN -and (Test-Path $gistTokenPath)) {
     $env:GITHUB_TOKEN = (Get-Content -Path $gistTokenPath -Raw).Trim()
 }
 
-$cloudflaredPath = Join-Path $env:USERPROFILE "Downloads\cloudflared-windows-amd64.exe"
-if (Test-Path $cloudflaredPath) {
+$cloudflaredPath = $null
+$repoCloudflaredPath = Join-Path $PSScriptRoot "..\cloudflared.exe"
+if (Test-Path $repoCloudflaredPath) {
+    $cloudflaredPath = (Resolve-Path $repoCloudflaredPath).Path
+} else {
+    $downloadCloudflaredPath = Join-Path $env:USERPROFILE "Downloads\cloudflared-windows-amd64.exe"
+    if (Test-Path $downloadCloudflaredPath) {
+        $cloudflaredPath = $downloadCloudflaredPath
+    } else {
+        $cloudflaredCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
+        if ($cloudflaredCmd) { $cloudflaredPath = $cloudflaredCmd.Source }
+    }
+}
+
+if ($cloudflaredPath) {
     $rootPath = $PSScriptRoot
     $gistId = $env:GITHUB_GIST_ID
     $gistToken = $env:GITHUB_TOKEN
     $existingJob = Get-Job -Name "cloudflared-keepalive" -ErrorAction SilentlyContinue | Where-Object { $_.State -eq "Running" }
     if (-not $existingJob) {
         Start-Job -Name "cloudflared-keepalive" -ScriptBlock {
-        param($cloudflaredPath, $port, $rootPath, $gistId, $gistToken)
+        param($cloudflaredPath, $port, $rootPath, $gistId, $gistToken, $cloudflaredConfigPath, $tunnelName, $tunnelHostname)
         while ($true) {
             $logPath = Join-Path $rootPath "cloudflared.log"
             $errPath = Join-Path $rootPath "cloudflared.err.log"
-            $args = "tunnel --url http://127.0.0.1:$port"
-            $proc = Start-Process -FilePath $cloudflaredPath -ArgumentList $args -WindowStyle Normal -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
+            $useNamedTunnel = $false
+            if ($tunnelName -and $tunnelHostname -and (Test-Path $cloudflaredConfigPath)) {
+                $useNamedTunnel = $true
+            }
+            if ($useNamedTunnel) {
+                $args = @("tunnel", "run", $tunnelName, "--config", $cloudflaredConfigPath)
+            } else {
+                $args = @("tunnel", "--url", "http://127.0.0.1:$port")
+            }
+            $proc = Start-Process -FilePath $cloudflaredPath -ArgumentList $args -WindowStyle Hidden -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
             $publicUrl = $null
-            $deadline = (Get-Date).AddSeconds(30)
-            while (-not $publicUrl -and (Get-Date) -lt $deadline) {
-                $paths = @()
-                if (Test-Path $logPath) { $paths += $logPath }
-                if (Test-Path $errPath) { $paths += $errPath }
-                if ($paths.Count -gt 0) {
-                    $match = Select-String -Path $paths -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" -AllMatches |
-                        Select-Object -First 1
-                    if ($match) { $publicUrl = $match.Matches[0].Value }
-                }
-                if (-not $publicUrl) {
-                    Start-Sleep -Milliseconds 500
+            if ($useNamedTunnel) {
+                $publicUrl = "https://$tunnelHostname"
+            } else {
+                $deadline = (Get-Date).AddSeconds(30)
+                while (-not $publicUrl -and (Get-Date) -lt $deadline) {
+                    $paths = @()
+                    if (Test-Path $logPath) { $paths += $logPath }
+                    if (Test-Path $errPath) { $paths += $errPath }
+                    if ($paths.Count -gt 0) {
+                        $match = Select-String -Path $paths -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" -AllMatches |
+                            Select-Object -First 1
+                        if ($match) { $publicUrl = $match.Matches[0].Value }
+                    }
+                    if (-not $publicUrl) {
+                        Start-Sleep -Milliseconds 500
+                    }
                 }
             }
             if ($publicUrl) {
@@ -80,7 +122,7 @@ if (Test-Path $cloudflaredPath) {
             }
             Start-Sleep -Seconds 2
         }
-        } -ArgumentList $cloudflaredPath, $Port, $rootPath, $gistId, $gistToken | Out-Null
+        } -ArgumentList $cloudflaredPath, $Port, $rootPath, $gistId, $gistToken, $cloudflaredConfigPath, $tunnelName, $tunnelHostname | Out-Null
     }
 }
 
@@ -92,7 +134,7 @@ try {
     $null = $null
 }
 if (-not (Test-NetConnection -ComputerName $ollamaHost -Port $ollamaPort -InformationLevel Quiet)) {
-    Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Normal
+    Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
     Start-Sleep -Seconds 2
 }
 

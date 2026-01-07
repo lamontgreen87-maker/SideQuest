@@ -1,16 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Text, View } from "react-native";
+import { BackHandler, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from "@expo-google-fonts/cinzel";
 import { WalletConnectModal, useWalletConnectModal } from "@walletconnect/modal-react-native";
 import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import CharacterScreen from "./src/screens/CharacterScreen";
 import PlaceholderScreen from "./src/screens/PlaceholderScreen";
 import ChecksScreen from "./src/screens/ChecksScreen";
 import BestiaryScreen from "./src/screens/BestiaryScreen";
 import SpellsScreen from "./src/screens/SpellsScreen";
-import CharacterScreen from "./src/screens/CharacterScreen";
-import SettingsScreen from "./src/screens/SettingsScreen";
 import StoryScreen from "./src/screens/StoryScreen";
+import SettingsScreen from "./src/screens/SettingsScreen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
   APP_VERSION,
@@ -18,12 +18,18 @@ import {
   GIST_CONFIG_URL,
   GITHUB_RELEASES_URL,
   GITHUB_RELEASES_PAGE,
+  LOCAL_SERVER_URL,
+  PROD_SERVER_URL,
   STORAGE_KEYS,
   WALLETCONNECT_METADATA,
   WALLETCONNECT_PROJECT_ID,
 } from "./src/config";
 import { getItem, removeItem, setItem } from "./src/storage";
-import { colors } from "./src/theme";
+import { colors, radius, spacing } from "./src/theme";
+
+if (typeof BackHandler.removeEventListener !== "function") {
+  BackHandler.removeEventListener = () => {};
+}
 
 function normalizeVersion(value) {
   if (!value) return "0.0.0";
@@ -51,6 +57,14 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+const STORY_BODY_STYLE = {
+  padding: 0,
+  paddingTop: 0,
+  paddingBottom: spacing.lg,
+  paddingHorizontal: 0,
+  flex: 1,
+};
+
 export default function App() {
   const [fontsLoaded] = useFonts({
     Cinzel_400Regular,
@@ -62,6 +76,7 @@ export default function App() {
   const [wallet, setWallet] = useState(null);
   const [credits, setCredits] = useState(0);
   const [activeTab, setActiveTab] = useState("story");
+  const [creationVisible, setCreationVisible] = useState(false);
   const [authStatus, setAuthStatus] = useState({ loading: false, error: null });
   const [walletStatus, setWalletStatus] = useState({});
   const [updateStatus, setUpdateStatus] = useState({
@@ -104,18 +119,45 @@ export default function App() {
   );
 
   const loadStoredState = useCallback(async () => {
-    const storedServer = await getItem(STORAGE_KEYS.serverUrl, DEFAULT_SERVER_URL);
+    let initialServerUrl = await getItem(STORAGE_KEYS.serverUrl, DEFAULT_SERVER_URL);
+    setServerUrl(initialServerUrl);
+
+    let serverIsHealthy = true;
+    try {
+      await apiGet(initialServerUrl, "/health");
+    } catch (error) {
+      serverIsHealthy = false;
+    }
+
+    if (!serverIsHealthy) {
+      // If server is not healthy, try refreshing from Gist
+      try {
+        const response = await fetch(GIST_CONFIG_URL);
+        if (response.ok) {
+          const data = await response.json();
+          const candidate =
+            data.serverUrl || data.server_url || data.server || data.url || null;
+          if (candidate) {
+            initialServerUrl = candidate; // Update to new URL from Gist
+            setServerUrl(candidate); // Update state
+            await setItem(STORAGE_KEYS.serverUrl, candidate); // Save to storage
+          }
+        }
+      } catch (error) {
+        // Gist fetch also failed, initialServerUrl remains the unhealthy one
+      }
+    }
+
+    // Now, run the health check for the *final* determined serverUrl
+    checkHealth(initialServerUrl);
+
     const storedToken = await getItem(STORAGE_KEYS.authToken, null);
     const storedWallet = await getItem(STORAGE_KEYS.authWallet, null);
-    if (storedServer) {
-      setServerUrl(storedServer);
-      checkHealth(storedServer);
-    }
     if (storedToken) {
       setToken(storedToken);
       setWallet(storedWallet);
       try {
-        const me = await apiGet(storedServer || DEFAULT_SERVER_URL, "/api/me");
+        const me = await apiGet(initialServerUrl, "/api/me");
         setCredits(me.credits || 0);
       } catch (error) {
         await removeItem(STORAGE_KEYS.authToken);
@@ -160,6 +202,15 @@ export default function App() {
     await setItem(STORAGE_KEYS.serverUrl, serverUrl);
     checkHealth(serverUrl);
   }, [serverUrl, checkHealth]);
+
+  const applyServerUrl = useCallback(
+    async (nextUrl) => {
+      setServerUrl(nextUrl);
+      await setItem(STORAGE_KEYS.serverUrl, nextUrl);
+      checkHealth(nextUrl);
+    },
+    [checkHealth]
+  );
 
   const refreshServerUrl = useCallback(async () => {
     try {
@@ -244,16 +295,65 @@ export default function App() {
     </Text>
   );
 
+  const serverStatusLabel = walletStatus.healthError
+    ? walletStatus.healthError
+    : walletStatus.health
+    ? `Server ${walletStatus.health}`
+    : "Server ready";
+  const serverOnline = !walletStatus.healthError;
+  const goToSettings = useCallback(() => setActiveTab("settings"), [setActiveTab]);
+  const goToBestiary = useCallback(() => setActiveTab("bestiary"), [setActiveTab]);
+  const goToStoryTab = useCallback(() => setActiveTab("story"), [setActiveTab]);
+  const goToCharacterTab = useCallback(() => setActiveTab("character"), [setActiveTab]);
+  const openCharacterCreator = useCallback(() => setCreationVisible(true), []);
+  const closeCharacterCreator = useCallback(() => setCreationVisible(false), []);
+  const [pendingCharacterEntry, setPendingCharacterEntry] = useState(null);
+  const handleCharacterCreated = useCallback(
+    (character) => {
+      closeCharacterCreator();
+      setActiveTab("story");
+      setPendingCharacterEntry({ ...character, timestamp: Date.now() });
+    },
+    [closeCharacterCreator, setActiveTab]
+  );
+  const handleStoryEntryConsumed = useCallback(() => {
+    setPendingCharacterEntry(null);
+  }, []);
+  const actionButtons = useMemo(
+    () => [
+      {
+        id: "new-game",
+        label: "New Game",
+        variant: "primary",
+        onPress: openCharacterCreator,
+      },
+      {
+        id: "sessions",
+        label: "Sessions",
+        variant: "ghost",
+        onPress: goToStoryTab,
+      },
+      {
+        id: "sheet",
+        label: "Sheet",
+        variant: "ghost",
+        onPress: goToCharacterTab,
+      },
+    ],
+    [goToStoryTab, goToCharacterTab, openCharacterCreator]
+  );
   const activeContent = useMemo(() => {
     switch (activeTab) {
       case "story":
-        return (
-          <StoryScreen
-            serverUrl={serverUrl}
-            onCreditsUpdate={setCredits}
-            onNavigate={setActiveTab}
-          />
-        );
+      return (
+        <StoryScreen
+          serverUrl={serverUrl}
+          onCreditsUpdate={setCredits}
+          onNavigate={setActiveTab}
+          characterEntry={pendingCharacterEntry}
+          onCharacterEntryHandled={handleStoryEntryConsumed}
+        />
+      );
       case "checks":
         return <ChecksScreen serverUrl={serverUrl} />;
       case "spells":
@@ -261,7 +361,12 @@ export default function App() {
       case "bestiary":
         return <BestiaryScreen serverUrl={serverUrl} />;
       case "character":
-        return <CharacterScreen serverUrl={serverUrl} />;
+        return (
+          <CharacterScreen
+            serverUrl={serverUrl}
+            onCharacterCreated={handleCharacterCreated}
+          />
+        );
       case "settings":
         return (
           <SettingsScreen
@@ -269,6 +374,8 @@ export default function App() {
             setServerUrl={setServerUrl}
             onSaveServerUrl={saveServerUrl}
             onRefreshServerUrl={refreshServerUrl}
+            onSelectServerUrl={applyServerUrl}
+            presets={{ local: LOCAL_SERVER_URL, prod: PROD_SERVER_URL }}
             updateStatus={updateStatus}
             onSignOut={disconnectWallet}
             credits={credits}
@@ -317,9 +424,37 @@ export default function App() {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         headerRight={headerRight}
+        statusOnline={serverOnline}
+        statusLabel={serverStatusLabel}
+        onSettingsPress={goToSettings}
+        onCartPress={goToBestiary}
+        actions={actionButtons}
+        bodyStyle={activeTab === "story" ? STORY_BODY_STYLE : undefined}
       >
         {activeContent}
       </HomeScreen>
+      <Modal
+        visible={creationVisible}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        transparent={false}
+        onRequestClose={closeCharacterCreator}
+      >
+        <View style={modalStyles.fullScreen}>
+          <View style={modalStyles.modalHeader}>
+            <Text style={modalStyles.modalTitle}>Character Creation</Text>
+            <Pressable onPress={closeCharacterCreator} style={modalStyles.closeButton}>
+              <Text style={modalStyles.closeLabel}>Close</Text>
+            </Pressable>
+          </View>
+          <View style={modalStyles.modalBody}>
+            <CharacterScreen
+              serverUrl={serverUrl}
+              onCharacterCreated={handleCharacterCreated}
+            />
+          </View>
+        </View>
+      </Modal>
       <WalletConnectModal
         projectId={WALLETCONNECT_PROJECT_ID}
         providerMetadata={WALLETCONNECT_METADATA}
@@ -327,3 +462,37 @@ export default function App() {
     </>
   );
 }
+
+const modalStyles = StyleSheet.create({
+  fullScreen: {
+    flex: 1,
+    backgroundColor: colors.panel,
+    justifyContent: "flex-start",
+    alignItems: "stretch",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 0,
+  },
+  modalTitle: {
+    color: colors.parchment,
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  closeButton: {
+    padding: 0,
+  },
+  closeLabel: {
+    color: colors.gold,
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  modalBody: {
+    flex: 1,
+    width: "100%",
+    alignSelf: "stretch",
+  },
+});

@@ -10,6 +10,8 @@ export default function SettingsScreen({
   setServerUrl,
   onSaveServerUrl,
   onRefreshServerUrl,
+  onSelectServerUrl,
+  presets,
   updateStatus,
   onSignOut,
   credits,
@@ -26,6 +28,20 @@ export default function SettingsScreen({
         <View style={styles.row}>
           <Button label="Save" onPress={onSaveServerUrl} disabled={!serverUrl} />
           <Button label="Check Gist" onPress={onRefreshServerUrl} variant="ghost" />
+        </View>
+        <View style={styles.row}>
+          <Button
+            label="Use Local"
+            onPress={() => onSelectServerUrl(presets?.local)}
+            disabled={!presets?.local}
+            variant="ghost"
+          />
+          <Button
+            label="Use Production"
+            onPress={() => onSelectServerUrl(presets?.prod)}
+            disabled={!presets?.prod}
+            variant="ghost"
+          />
         </View>
       </Section>
 
