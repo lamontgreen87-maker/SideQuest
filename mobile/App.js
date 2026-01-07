@@ -144,8 +144,15 @@ export default function App() {
           }
         }
       } catch (error) {
-        // Gist fetch also failed, initialServerUrl remains the unhealthy one
+        // Ignore gist errors and fall back below.
       }
+    }
+
+    if (!serverIsHealthy && initialServerUrl !== PROD_SERVER_URL) {
+      const fallbackUrl = PROD_SERVER_URL;
+      initialServerUrl = fallbackUrl;
+      setServerUrl(fallbackUrl);
+      await setItem(STORAGE_KEYS.serverUrl, fallbackUrl);
     }
 
     // Now, run the health check for the *final* determined serverUrl

@@ -2,7 +2,7 @@ export const APP_VERSION = "0.1.5";
 
 export const LOCAL_SERVER_URL = "http://192.168.1.208:8000";
 export const PROD_SERVER_URL = "https://sidequestai.org";
-export const DEFAULT_SERVER_URL = LOCAL_SERVER_URL;
+export const DEFAULT_SERVER_URL = PROD_SERVER_URL;
 export const GIST_CONFIG_URL =
   "https://gist.githubusercontent.com/lamontgreen87-maker/ad3e3e7abcf09f755a5087aaa15a5bd1/raw/config.json";
 
