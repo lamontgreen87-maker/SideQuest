@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { BackHandler, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { BackHandler, Modal, Pressable, StatusBar, StyleSheet, Text, View } from "react-native";
+import * as NavigationBar from "expo-navigation-bar";
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from "@expo-google-fonts/cinzel";
 import { WalletConnectModal, useWalletConnectModal } from "@walletconnect/modal-react-native";
 import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import CharacterScreen from "./src/screens/CharacterScreen";
 import PlaceholderScreen from "./src/screens/PlaceholderScreen";
-import ChecksScreen from "./src/screens/ChecksScreen";
 import BestiaryScreen from "./src/screens/BestiaryScreen";
 import SpellsScreen from "./src/screens/SpellsScreen";
 import StoryScreen from "./src/screens/StoryScreen";
@@ -89,7 +89,6 @@ export default function App() {
   const tabs = useMemo(
     () => [
       { id: "story", label: "Story" },
-      { id: "checks", label: "Checks" },
       { id: "spells", label: "Spells" },
       { id: "bestiary", label: "Bestiary" },
       { id: "character", label: "Character" },
@@ -204,6 +203,11 @@ export default function App() {
     loadStoredState();
     checkForUpdates();
   }, [checkForUpdates, loadStoredState]);
+
+  useEffect(() => {
+    NavigationBar.setBehaviorAsync("overlay-swipe");
+    NavigationBar.setVisibilityAsync("hidden");
+  }, []);
 
   const saveServerUrl = useCallback(async () => {
     await setItem(STORAGE_KEYS.serverUrl, serverUrl);
@@ -361,8 +365,6 @@ export default function App() {
           onCharacterEntryHandled={handleStoryEntryConsumed}
         />
       );
-      case "checks":
-        return <ChecksScreen serverUrl={serverUrl} />;
       case "spells":
         return <SpellsScreen serverUrl={serverUrl} />;
       case "bestiary":
@@ -391,17 +393,34 @@ export default function App() {
       default:
         return null;
     }
-  }, [activeTab]);
+  }, [
+    activeTab,
+    serverUrl,
+    setCredits,
+    pendingCharacterEntry,
+    handleStoryEntryConsumed,
+    handleCharacterCreated,
+    saveServerUrl,
+    refreshServerUrl,
+    applyServerUrl,
+    updateStatus,
+    disconnectWallet,
+    credits,
+  ]);
 
   if (!fontsLoaded) {
     return (
-      <View style={{ flex: 1, backgroundColor: colors.ink }} />
+      <>
+        <StatusBar hidden />
+        <View style={{ flex: 1, backgroundColor: colors.ink }} />
+      </>
     );
   }
 
   if (!token) {
     return (
       <>
+        <StatusBar hidden />
         <AuthScreen
           serverUrl={serverUrl}
           setServerUrl={setServerUrl}
@@ -426,6 +445,7 @@ export default function App() {
 
   return (
     <>
+      <StatusBar hidden />
       <HomeScreen
         tabs={tabs}
         activeTab={activeTab}

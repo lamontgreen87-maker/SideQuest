@@ -4,10 +4,25 @@ import Button from "../components/Button";
 import Section from "../components/Section";
 import { apiGet } from "../api/client";
 import { colors, radius, spacing } from "../theme";
+import { DEFAULT_BESTIARY } from "../data/dnd";
 
-function formatKey(key) {
-  return key.replace(/_/g, " ");
+const ABILITIES = ["str", "dex", "con", "int", "wis", "cha"];
+
+const ABILITY_LABELS = {
+  str: "STR",
+  dex: "DEX",
+  con: "CON",
+  int: "INT",
+  wis: "WIS",
+  cha: "CHA",
+};
+
+function formatList(value) {
+  if (value === undefined || value === null) return "-";
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
 }
+
 
 export default function BestiaryScreen({ serverUrl }) {
   const [monsters, setMonsters] = useState([]);
@@ -16,7 +31,13 @@ export default function BestiaryScreen({ serverUrl }) {
   const loadBestiary = useCallback(async () => {
     try {
       const data = await apiGet(serverUrl, "/api/bestiary");
-      const list = Object.entries(data || {}).map(([id, payload]) => ({
+      const fallback =
+        data ||
+        DEFAULT_BESTIARY.reduce((acc, entry) => {
+          acc[entry.id] = entry;
+          return acc;
+        }, {});
+      const list = Object.entries(fallback).map(([id, payload]) => ({
         id,
         ...payload,
       }));
@@ -40,17 +61,14 @@ export default function BestiaryScreen({ serverUrl }) {
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.content]}>
       <Section title="Bestiary">
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.row}>
             {monsters.map((monster) => (
               <Text
                 key={monster.id}
-                style={[
-                  styles.pill,
-                  monster.id === selectedId && styles.pillActive,
-                ]}
+                style={[styles.pill, monster.id === selectedId && styles.pillActive]}
                 onPress={() => setSelectedId(monster.id)}
               >
                 {monster.name}
@@ -64,16 +82,68 @@ export default function BestiaryScreen({ serverUrl }) {
         {selected ? (
           <View style={styles.card}>
             <Text style={styles.name}>{selected.name}</Text>
-            <Text style={styles.meta}>Source: {selected.source || "core"}</Text>
-            <View style={styles.stats}>
-              <Text style={styles.stat}>AC: {selected.armor_class}</Text>
-              <Text style={styles.stat}>HP: {selected.max_hp}</Text>
-              <Text style={styles.stat}>Attack Bonus: {selected.attack_bonus}</Text>
+            <Text style={styles.meta}>
+              {selected.size || "Medium"} · {selected.type || "Creature"} ·{" "}
+              {selected.alignment || "Unaligned"}
+            </Text>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Armor Class</Text>
+              <Text style={styles.statValue}>{formatList(selected.armor_class)}</Text>
             </View>
-            <Text style={styles.stat}>Damage: {selected.damage}</Text>
-            <Text style={styles.stat}>Type: {selected.damage_type}</Text>
-            {selected.desc ? (
-              <Text style={styles.desc}>{selected.desc}</Text>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Hit Points</Text>
+              <Text style={styles.statValue}>{formatList(selected.max_hp)}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Speed</Text>
+              <Text style={styles.statValue}>{formatList(selected.speed)}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Challenge</Text>
+              <Text style={styles.statValue}>{formatList(selected.challenge)}</Text>
+            </View>
+            <View style={styles.abilityGrid}>
+              {ABILITIES.map((key) => (
+                <View key={key} style={styles.abilityBlock}>
+                  <Text style={styles.abilityLabel}>{ABILITY_LABELS[key]}</Text>
+                  <Text style={styles.abilityScore}>
+                    {formatList(selected.stats?.[key])}
+                  </Text>
+                </View>
+              ))}
+            </View>
+            {selected.actions?.length ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Actions</Text>
+                {selected.actions.map((action) => (
+                  <View key={action.name} style={styles.entry}>
+                    <Text style={styles.entryTitle}>{action.name}</Text>
+                    <Text style={styles.entryDesc}>{formatList(action.desc)}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+            {selected.traits?.length ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Traits</Text>
+                {selected.traits.map((trait) => (
+                  <View key={trait.name} style={styles.entry}>
+                    <Text style={styles.entryTitle}>{trait.name}</Text>
+                    <Text style={styles.entryDesc}>{formatList(trait.desc)}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+            {selected.legendary_actions?.length ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Legendary Actions</Text>
+                {selected.legendary_actions.map((action) => (
+                  <View key={action.name} style={styles.entry}>
+                    <Text style={styles.entryTitle}>{action.name}</Text>
+                    <Text style={styles.entryDesc}>{formatList(action.desc)}</Text>
+                  </View>
+                ))}
+              </View>
             ) : null}
           </View>
         ) : (
@@ -86,8 +156,12 @@ export default function BestiaryScreen({ serverUrl }) {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    flex: 1,
+  },
   content: {
     gap: spacing.lg,
+    paddingVertical: spacing.lg,
   },
   row: {
     flexDirection: "row",
@@ -117,6 +191,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.panel,
     padding: spacing.md,
+    gap: spacing.sm,
   },
   name: {
     color: colors.parchment,
@@ -129,16 +204,75 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: spacing.sm,
   },
-  stats: {
+  infoRow: {
     flexDirection: "row",
-    gap: spacing.md,
-    flexWrap: "wrap",
-    marginBottom: spacing.sm,
+    justifyContent: "space-between",
+    marginBottom: spacing.xs,
   },
-  stat: {
+  statLabel: {
+    color: colors.mutedGold,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  statValue: {
     color: colors.parchment,
     fontSize: 12,
+    fontWeight: "600",
+  },
+  abilityGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  abilityBlock: {
+    width: "32%",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.panel,
+    padding: spacing.xs,
+    alignItems: "center",
+  },
+  abilityLabel: {
+    color: colors.mutedGold,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: "uppercase",
     marginBottom: spacing.xs,
+  },
+  abilityScore: {
+    color: colors.parchment,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  section: {
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  sectionTitle: {
+    color: colors.mutedGold,
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  entry: {
+    padding: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.panelAlt,
+  },
+  entryTitle: {
+    color: colors.gold,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  entryDesc: {
+    color: colors.parchment,
+    fontSize: 12,
+    marginTop: spacing.xs,
   },
   desc: {
     color: colors.mutedGold,

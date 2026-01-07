@@ -391,6 +391,749 @@
       ],
       "conditions": [],
       "items": []
+    },
+    "8d091414-bbf7-42fd-adf3-352441cec3a0": {
+      "name": "Adventurer 103",
+      "class": "Paladin",
+      "level": 1,
+      "stats": {
+        "str": 10,
+        "dex": 15,
+        "con": 14,
+        "int": 13,
+        "wis": 12,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 12,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Shortbow",
+          "attack_ability": "dex",
+          "damage": "1d6+0",
+          "damage_type": "piercing",
+          "finesse": false
+        }
+      ],
+      "race": null,
+      "background": null,
+      "alignment": null,
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": null,
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "wis",
+        "cha"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "c5172668-ec9a-4769-8f24-382377a8fad0": {
+      "name": "Adventurer 158",
+      "class": "Warlock",
+      "level": 1,
+      "stats": {
+        "str": 12,
+        "dex": 14,
+        "con": 8,
+        "int": 15,
+        "wis": 10,
+        "cha": 13
+      },
+      "prof_bonus": 2,
+      "armor_class": 12,
+      "max_hp": 7,
+      "hp": 7,
+      "weapons": [
+        {
+          "name": "Rapier",
+          "attack_ability": "dex",
+          "damage": "1d8+0",
+          "damage_type": "piercing",
+          "finesse": true
+        }
+      ],
+      "race": null,
+      "background": null,
+      "alignment": null,
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": null,
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "wis",
+        "cha"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "0a6ded23-bf79-4b88-b62a-216bf3299981": {
+      "name": "Adventurer 186",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "c62afee2-dbd6-4ef2-b877-65220f8d3b9e": {
+      "name": "Adventurer 766",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "17231e11-2937-4d77-9e7b-18983a20d816": {
+      "name": "Adventurer 969",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "8955c0f7-6406-40ea-a2ff-d6e062ecf2a3": {
+      "name": "Adventurer 188",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "2d397275-1f69-4586-bbd2-c7db6268ae87": {
+      "name": "Adventurer 982",
+      "class": "Druid",
+      "level": 1,
+      "stats": {
+        "str": 14,
+        "dex": 8,
+        "con": 10,
+        "int": 15,
+        "wis": 12,
+        "cha": 13
+      },
+      "prof_bonus": 2,
+      "armor_class": 9,
+      "max_hp": 8,
+      "hp": 8,
+      "weapons": [
+        {
+          "name": "Longbow",
+          "attack_ability": "dex",
+          "damage": "1d8",
+          "damage_type": "piercing",
+          "finesse": false
+        }
+      ],
+      "race": null,
+      "background": null,
+      "alignment": null,
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": null,
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "int",
+        "wis"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "f16ec108-ed89-4ac4-95d6-bc5a13e11e6c": {
+      "name": "Adventurer 375",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "747835c0-4952-4f21-9c85-d17e737cd157": {
+      "name": "Tom",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        },
+        {
+          "name": "Greataxe",
+          "attack_ability": "str",
+          "damage": "1d12+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [
+        "English"
+      ],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str"
+      ],
+      "skill_proficiencies": [
+        "athletics"
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "06dde233-34eb-4c74-9fc5-28c6c879a4a6": {
+      "name": "Tom",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Greatsword",
+          "attack_ability": "str",
+          "damage": "2d6+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [
+        "medicine"
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "420fcc2d-aa5f-4660-af8e-cf6a8bacb4d2": {
+      "name": "Bleh",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "0699823e-1588-4fae-b4d3-841d65e16edc": {
+      "name": "Adventurer 393",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "e418d57c-dde6-4152-93bd-baf6993a908b": {
+      "name": "Bleh",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "38bfdb09-ec6f-4891-a051-265cb5d3183c": {
+      "name": "Adventurer 553",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "8bc94ec4-f3ca-4091-af08-73a73666afdf": {
+      "name": "Adventurer 650",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "0b2471a2-97d7-463f-abf1-fb8f2124c86d": {
+      "name": "Bleh",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
+    },
+    "65745df2-9619-4c81-998f-bab823ecf6e2": {
+      "name": "Lamont",
+      "class": "Barbarian",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Longsword",
+          "attack_ability": "str",
+          "damage": "1d8+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "con"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
     }
   }
 }

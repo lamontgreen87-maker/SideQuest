@@ -21,6 +21,7 @@ export default function ChecksScreen({ serverUrl }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const shouldNarrate = useCallback(() => Math.random() < 0.5, []);
+  const [lastCheckLabel, setLastCheckLabel] = useState("");
 
   const loadCatalogs = useCallback(async () => {
     try {
@@ -89,6 +90,13 @@ export default function ChecksScreen({ serverUrl }) {
     return payload;
   }, [mode, skill, ability, save, dc]);
 
+  const buildCheckLabel = useCallback(() => {
+    if (mode === "skill" && skill) return `${skill} check`;
+    if (mode === "ability" && ability) return `${ability} check`;
+    if (mode === "save" && save) return `${save} save`;
+    return "Check";
+  }, [mode, skill, ability, save]);
+
   const suggestDc = useCallback(async () => {
     setBusy(true);
     try {
@@ -121,12 +129,13 @@ export default function ChecksScreen({ serverUrl }) {
         payload
       );
       setResult(response);
+      setLastCheckLabel(buildCheckLabel());
     } catch (error) {
       console.error("Check failed", error);
     } finally {
       setBusy(false);
     }
-  }, [ensureSession, buildPayload, serverUrl, shouldNarrate]);
+  }, [ensureSession, buildPayload, serverUrl, shouldNarrate, buildCheckLabel]);
 
   const modeButtons = useMemo(
     () => [
@@ -139,41 +148,6 @@ export default function ChecksScreen({ serverUrl }) {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Section title="Party">
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.row}>
-            {pcs.map((pc) => (
-              <Text
-                key={pc.id}
-                style={[styles.pill, pc.id === pcId && styles.pillActive]}
-                onPress={() => {
-                  setPcId(pc.id);
-                  setSessionId(null);
-                }}
-              >
-                {pc.name}
-              </Text>
-            ))}
-          </View>
-        </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.row}>
-            {enemies.map((enemy) => (
-              <Text
-                key={enemy.id}
-                style={[styles.pill, enemy.id === enemyId && styles.pillActive]}
-                onPress={() => {
-                  setEnemyId(enemy.id);
-                  setSessionId(null);
-                }}
-              >
-                {enemy.name}
-              </Text>
-            ))}
-          </View>
-        </ScrollView>
-      </Section>
-
       <Section title="Check Type">
         <View style={styles.row}>
           {modeButtons.map((option) => (
@@ -244,6 +218,9 @@ export default function ChecksScreen({ serverUrl }) {
       <Section title="Result">
         {result ? (
           <View style={styles.resultCard}>
+            <Text style={styles.resultText}>
+              {lastCheckLabel || "Check"} = {result.total ?? "-"}
+            </Text>
             <Text style={styles.resultText}>
               Total: {result.total} (Rolls: {result.rolls?.join(", ") || "-"})
             </Text>

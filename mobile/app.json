@@ -2,6 +2,7 @@
   "expo": {
     "name": "Side Quest",
     "slug": "dungeon-crawler",
+    "entryPoint": "./index.js",
     "version": "0.1.5",
     "orientation": "portrait",
     "userInterfaceStyle": "light",

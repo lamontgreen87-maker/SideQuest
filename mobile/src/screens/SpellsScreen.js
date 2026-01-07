@@ -4,6 +4,14 @@ import Button from "../components/Button";
 import Section from "../components/Section";
 import { apiGet } from "../api/client";
 import { colors, radius, spacing } from "../theme";
+import { DEFAULT_SPELLS } from "../data/dnd";
+
+function formatList(value) {
+  if (value === undefined || value === null) return "-";
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
+}
+
 
 export default function SpellsScreen({ serverUrl }) {
   const [spells, setSpells] = useState([]);
@@ -12,7 +20,13 @@ export default function SpellsScreen({ serverUrl }) {
   const loadSpells = useCallback(async () => {
     try {
       const data = await apiGet(serverUrl, "/api/rules/spells");
-      const list = Object.entries(data || {}).map(([id, payload]) => ({
+      const fallback =
+        data ||
+        DEFAULT_SPELLS.reduce((acc, entry) => {
+          acc[entry.id] = entry;
+          return acc;
+        }, {});
+      const list = Object.entries(fallback).map(([id, payload]) => ({
         id,
         ...payload,
       }));
@@ -36,17 +50,14 @@ export default function SpellsScreen({ serverUrl }) {
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.content]}>
       <Section title="Spells">
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.row}>
             {spells.map((spell) => (
               <Text
                 key={spell.id}
-                style={[
-                  styles.pill,
-                  spell.id === selectedId && styles.pillActive,
-                ]}
+                style={[styles.pill, spell.id === selectedId && styles.pillActive]}
                 onPress={() => setSelectedId(spell.id)}
               >
                 {spell.name}
@@ -61,16 +72,32 @@ export default function SpellsScreen({ serverUrl }) {
           <View style={styles.card}>
             <Text style={styles.name}>{selected.name}</Text>
             <Text style={styles.meta}>
-              Level {selected.level} · {selected.school}
+              Level {formatList(selected.level)} · {formatList(selected.school)}
             </Text>
-            <Text style={styles.stat}>Casting: {selected.casting_time}</Text>
-            <Text style={styles.stat}>Range: {selected.range}</Text>
-            <Text style={styles.stat}>Duration: {selected.duration}</Text>
-            {selected.components ? (
-              <Text style={styles.stat}>
-                Components: {selected.components.join(", ")}
-              </Text>
-            ) : null}
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Casting</Text>
+              <Text style={styles.statValue}>{formatList(selected.casting_time)}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Range</Text>
+              <Text style={styles.statValue}>{formatList(selected.range)}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Duration</Text>
+              <Text style={styles.statValue}>{formatList(selected.duration)}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Components</Text>
+              <Text style={styles.statValue}>{formatList(selected.components)}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>Classes</Text>
+              <Text style={styles.statValue}>{formatList(selected.classes)}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.statLabel}>School</Text>
+              <Text style={styles.statValue}>{formatList(selected.school)}</Text>
+            </View>
             {selected.desc ? (
               <Text style={styles.desc}>{selected.desc.join("\n\n")}</Text>
             ) : null}
@@ -78,6 +105,9 @@ export default function SpellsScreen({ serverUrl }) {
               <Text style={styles.desc}>
                 Higher Level: {selected.higher_level.join("\n\n")}
               </Text>
+            ) : null}
+            {selected.ritual ? (
+              <Text style={styles.desc}>Ritual: {selected.ritual ? "Yes" : "No"}</Text>
             ) : null}
           </View>
         ) : (
@@ -90,8 +120,12 @@ export default function SpellsScreen({ serverUrl }) {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    flex: 1,
+  },
   content: {
     gap: spacing.lg,
+    paddingVertical: spacing.lg,
   },
   row: {
     flexDirection: "row",
@@ -133,10 +167,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: spacing.sm,
   },
-  stat: {
+  infoRow: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.xs,
+    marginBottom: spacing.xs,
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  statLabel: {
+    color: colors.mutedGold,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  statValue: {
     color: colors.parchment,
     fontSize: 12,
-    marginBottom: spacing.xs,
+    fontWeight: "600",
   },
   desc: {
     color: colors.mutedGold,

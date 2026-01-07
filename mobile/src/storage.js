@@ -27,6 +27,7 @@ export async function getJson(key, fallback = null) {
     return JSON.parse(raw);
   } catch (error) {
     console.error("Storage JSON parse failed", key, error);
+    await removeItem(key); // remove invalid value so future reads succeed
     return fallback;
   }
 }

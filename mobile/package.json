@@ -2,7 +2,7 @@
   "name": "dungeon-crawler-mobile",
   "version": "0.1.4",
   "private": true,
-  "main": "node_modules/expo/AppEntry.js",
+  "main": "index.js",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
@@ -10,8 +10,8 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@react-native-async-storage/async-storage": "^1.23.1",
     "@expo-google-fonts/cinzel": "^0.2.3",
+    "@react-native-async-storage/async-storage": "^1.23.1",
     "@walletconnect/modal-react-native": "^1.1.0",
     "@walletconnect/react-native-compat": "^2.12.2",
     "expo": "^54.0.0",
@@ -21,10 +21,11 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-get-random-values": "^1.10.0",
-    "react-native-url-polyfill": "^2.0.0",
-    "react-native-sse": "^1.2.1"
+    "react-native-sse": "^1.2.1",
+    "react-native-url-polyfill": "^2.0.0"
   },
   "devDependencies": {
+    "@react-native-community/cli": "latest",
     "babel-preset-expo": "^54.0.9"
   }
 }
