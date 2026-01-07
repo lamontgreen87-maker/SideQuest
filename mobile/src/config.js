@@ -15,8 +15,23 @@ export const WALLETCONNECT_PROJECT_ID = "7fb717fa1a1cc0f849a70d99c6837f0a";
 export const WALLETCONNECT_METADATA = {
   name: "Side Quest",
   description: "Side Quest wallet login",
-  url: "https://sidequest.local",
+  url: "https://sidequestai.org",
   icons: ["https://walletconnect.com/walletconnect-logo.png"],
+};
+
+export const WALLETCONNECT_SESSION_PARAMS = {
+  requiredNamespaces: {
+    eip155: {
+      methods: [
+        "personal_sign",
+        "eth_sign",
+        "eth_signTypedData",
+        "eth_signTypedData_v4",
+      ],
+      chains: ["eip155:1"],
+      events: ["chainChanged", "accountsChanged"],
+    },
+  },
 };
 
 export const STORAGE_KEYS = {

@@ -20,6 +20,7 @@ import BestiaryScreen from "./src/screens/BestiaryScreen";
 import SpellsScreen from "./src/screens/SpellsScreen";
 import StoryScreen from "./src/screens/StoryScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
+import Screen from "./src/components/Screen";
 import { apiGet, apiPost } from "./src/api/client";
 import {
   APP_VERSION,
@@ -32,6 +33,7 @@ import {
   STORAGE_KEYS,
   WALLETCONNECT_METADATA,
   WALLETCONNECT_PROJECT_ID,
+  WALLETCONNECT_SESSION_PARAMS,
 } from "./src/config";
 import { getItem, getJson, removeItem, setItem } from "./src/storage";
 import { colors, radius, spacing } from "./src/theme";
@@ -461,6 +463,36 @@ export default function App() {
         <WalletConnectModal
           projectId={WALLETCONNECT_PROJECT_ID}
           providerMetadata={WALLETCONNECT_METADATA}
+          sessionParams={WALLETCONNECT_SESSION_PARAMS}
+        />
+      </>
+    );
+  }
+
+  if (creationVisible) {
+    return (
+      <>
+        <StatusBar hidden />
+        <Screen>
+          <SafeAreaView style={modalStyles.fullScreen}>
+            <View style={modalStyles.modalHeader}>
+              <Text style={modalStyles.modalTitle}>Character Creation</Text>
+              <Pressable onPress={closeCharacterCreator} style={modalStyles.closeButton}>
+                <Text style={modalStyles.closeLabel}>Close</Text>
+              </Pressable>
+            </View>
+            <View style={modalStyles.modalBody}>
+              <CharacterScreen
+                serverUrl={serverUrl}
+                onCharacterCreated={handleCharacterCreated}
+              />
+            </View>
+          </SafeAreaView>
+        </Screen>
+        <WalletConnectModal
+          projectId={WALLETCONNECT_PROJECT_ID}
+          providerMetadata={WALLETCONNECT_METADATA}
+          sessionParams={WALLETCONNECT_SESSION_PARAMS}
         />
       </>
     );
@@ -483,28 +515,6 @@ export default function App() {
       >
         {activeContent}
       </HomeScreen>
-      <Modal
-        visible={creationVisible}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        transparent={false}
-        onRequestClose={closeCharacterCreator}
-      >
-        <SafeAreaView style={modalStyles.fullScreen}>
-          <View style={modalStyles.modalHeader}>
-            <Text style={modalStyles.modalTitle}>Character Creation</Text>
-            <Pressable onPress={closeCharacterCreator} style={modalStyles.closeButton}>
-              <Text style={modalStyles.closeLabel}>Close</Text>
-            </Pressable>
-          </View>
-          <View style={modalStyles.modalBody}>
-            <CharacterScreen
-              serverUrl={serverUrl}
-              onCharacterCreated={handleCharacterCreated}
-            />
-          </View>
-        </SafeAreaView>
-      </Modal>
       <Modal
         visible={sessionsVisible}
         animationType="slide"
@@ -555,6 +565,7 @@ export default function App() {
       <WalletConnectModal
         projectId={WALLETCONNECT_PROJECT_ID}
         providerMetadata={WALLETCONNECT_METADATA}
+        sessionParams={WALLETCONNECT_SESSION_PARAMS}
       />
     </>
   );

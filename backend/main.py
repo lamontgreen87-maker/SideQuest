@@ -556,6 +556,12 @@ def get_monster_save_bonus(monster: Monster, ability: str) -> int:
     return (stat - 10) // 2
 
 def normalize_spell_payload(spell_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    raw_classes = payload.get("classes")
+    classes: List[str] = []
+    if isinstance(raw_classes, str):
+        classes = [part.strip() for part in raw_classes.split(",") if part.strip()]
+    elif isinstance(raw_classes, list):
+        classes = [str(item).strip() for item in raw_classes if str(item).strip()]
     return {
         "id": spell_id,
         "name": payload.get("name"),
@@ -569,7 +575,7 @@ def normalize_spell_payload(spell_id: str, payload: Dict[str, Any]) -> Dict[str,
         "components": payload.get("components"),
         "desc": payload.get("desc"),
         "higher_level": payload.get("higher_level"),
-        "classes": payload.get("classes"),
+        "classes": classes,
     }
 
 def pick_enemy_action(monster: Monster) -> Optional[Dict[str, Any]]:

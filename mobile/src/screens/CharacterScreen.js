@@ -110,14 +110,25 @@ function abilityMod(score) {
   return Math.floor((score - 10) / 2);
 }
 
+function normalizeSpellClasses(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 export default function CharacterScreen({
   serverUrl,
   onCharacterCreated,
   scrollEnabled = true,
 }) {
   const [createBusy, setCreateBusy] = useState(false);
-  const [layoutHeight, setLayoutHeight] = useState(0);
-  const [contentHeight, setContentHeight] = useState(0);
 
   const [formName, setFormName] = useState("");
   const [formLevel, setFormLevel] = useState("1");
@@ -154,7 +165,8 @@ export default function CharacterScreen({
       const list = Object.entries(source).map(([id, payload]) => ({
         id,
         name: payload.name,
-        classes: payload.classes || [],
+        classes: normalizeSpellClasses(payload.classes),
+        level: payload.level,
       }));
       list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
       setSpellCatalog(list);
@@ -384,11 +396,6 @@ export default function CharacterScreen({
 
   const content = (
     <>
-      {__DEV__ ? (
-        <Text style={styles.debugText}>
-          Scroll {Math.round(contentHeight)} / {Math.round(layoutHeight)}
-        </Text>
-      ) : null}
       <Section title="Create Character">
         <TextInput
           style={styles.formInput}
@@ -673,47 +680,29 @@ export default function CharacterScreen({
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    <ScrollView
+      contentContainerStyle={styles.content}
+      style={styles.scrollArea}
+      scrollEnabled={scrollEnabled}
+      nestedScrollEnabled
+      showsVerticalScrollIndicator
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
     >
-      <ScrollView
-        contentContainerStyle={[styles.content, styles.scrollContent]}
-        style={styles.scrollArea}
-        scrollEnabled
-        nestedScrollEnabled
-        showsVerticalScrollIndicator
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        onLayout={(event) => setLayoutHeight(event.nativeEvent.layout.height)}
-        onContentSizeChange={(_, height) => setContentHeight(height)}
-      >
-        {content}
-      </ScrollView>
-    </KeyboardAvoidingView>
+      {content}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    minHeight: 0,
-  },
   content: {
     gap: spacing.lg,
-    paddingHorizontal: 0,
+    paddingVertical: spacing.lg,
     paddingBottom: spacing.xl,
-    width: "100%",
-    alignItems: "stretch",
-  },
-  scrollContent: {
-    flexGrow: 1,
   },
   scrollArea: {
-    width: "100%",
     flex: 1,
-    alignSelf: "stretch",
-    minHeight: 0,
+    width: "100%",
   },
   formInput: {
     borderWidth: 1,
@@ -856,11 +845,6 @@ const styles = StyleSheet.create({
     color: colors.gold,
     fontSize: 12,
     fontWeight: "700",
-  },
-  debugText: {
-    color: colors.mutedGold,
-    fontSize: 10,
-    marginBottom: spacing.sm,
   },
   proficiencyCard: {
     flex: 1,
