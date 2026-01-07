@@ -25,12 +25,51 @@ const storyCache = {
 const DRAWER_COLLAPSED_HEIGHT = 48;
 const DRAWER_EXPANDED_HEIGHT = 360;
 const DRAWER_CONTENT_HEIGHT = DRAWER_EXPANDED_HEIGHT - DRAWER_COLLAPSED_HEIGHT;
-const RULES_PROMPT =
-  "You know the D&D 5e ruleset (ability scores, checks, combat flow, spellcasting, etc.) and that the player wants a raw, uncensored adventure. Keep acting as the GM with those constraints in mind.";
+const ABILITY_ORDER = ["str", "dex", "con", "int", "wis", "cha"];
+const LOADING_FLAVOR = [
+  "polishing toadstools",
+  "gathering gnomes",
+  "sharpening swords",
+  "brewing storm tea",
+  "charting cavern echoes",
+  "folding secret maps",
+  "counting torchwick",
+  "whispering to ravens",
+];
+const INTRO_FALLBACKS = [
+  "A lantern sputters beside a mossy stairwell that drops into a ruin no map admits. Damp air tastes of iron and old incense, and something below answers your footstep with a slow, waiting scrape. Your hand closes around a cracked stone charm that hums with a warning. Do you descend or search the threshold for a safer way in?",
+  "Stormlight flashes over a ridge of broken pillars as the earth rumbles beneath your boots. A hidden door has opened in the hillside, exhaling warm breath and the faint scent of spice and ash. Somewhere inside, a bell rings once, then stops. What do you do?",
+  "A low chant rises from the valley, and the torches along the old road flare as you approach. The shrine ahead is half-collapsed, its altar split, yet fresh footprints circle the entrance. Your pack shifts as if something inside wants out. Will you enter, scout, or call out?",
+];
 
 function pickIntro() {
   const index = Math.floor(Math.random() * INTRO_PROMPTS.length);
   return INTRO_PROMPTS[index] || INTRO_PROMPTS[0];
+}
+
+function pickFallbackIntro() {
+  const index = Math.floor(Math.random() * INTRO_FALLBACKS.length);
+  return INTRO_FALLBACKS[index] || INTRO_FALLBACKS[0];
+}
+
+function looksLikePrompt(text) {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("write an opening scene") ||
+    lower.includes("create a new opening scene") ||
+    lower.includes("you are a fantasy narrator") ||
+    lower.includes("avoid clich") ||
+    lower.includes("opening scene (")
+  );
+}
+
+function sanitizeIntro(text) {
+  if (!text) return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (trimmed.length < 80) return null;
+  if (looksLikePrompt(trimmed)) return null;
+  return trimmed;
 }
 
 export default function StoryScreen({
@@ -47,6 +86,7 @@ export default function StoryScreen({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [pcs, setPcs] = useState([]);
+  const [pcCatalog, setPcCatalog] = useState({});
   const [pcId, setPcId] = useState(null);
   const [enemyId, setEnemyId] = useState(null);
   const [rulesSessionId, setRulesSessionId] = useState(null);
@@ -56,38 +96,128 @@ export default function StoryScreen({
   const [drawerExpanded, setDrawerExpanded] = useState(false);
   const drawerAnimation = useRef(new Animated.Value(0)).current;
   const [checkMode, setCheckMode] = useState("skill");
-  const [checkSkill, setCheckSkill] = useState("");
-  const [checkAbility, setCheckAbility] = useState("");
-  const [checkSave, setCheckSave] = useState("");
-  const [checkDc, setCheckDc] = useState("15");
-  const [checkContext, setCheckContext] = useState("");
   const [checkResult, setCheckResult] = useState(null);
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkUsed, setCheckUsed] = useState(false);
   const [rulesSeeded, setRulesSeeded] = useState(false);
+  const [adventureLoading, setAdventureLoading] = useState(false);
+  const [loadingFlavorIndex, setLoadingFlavorIndex] = useState(0);
   const shouldNarrate = useCallback(() => Math.random() < 0.5, []);
+  const selectedPc = useMemo(() => pcCatalog[pcId] || null, [pcCatalog, pcId]);
+  const skillOptions = useMemo(
+    () => selectedPc?.skill_proficiencies || [],
+    [selectedPc]
+  );
+  const saveOptions = useMemo(
+    () => selectedPc?.save_proficiencies || [],
+    [selectedPc]
+  );
+  const abilityOptions = useMemo(() => {
+    const stats = selectedPc?.stats || {};
+    const found = ABILITY_ORDER.filter((key) => stats[key] != null);
+    return found.length ? found : ABILITY_ORDER;
+  }, [selectedPc]);
+
+  const ensureSession = useCallback(async () => {
+    if (sessionId) {
+      return sessionId;
+    }
+    const response = await apiPost(serverUrl, "/api/sessions", {
+      messages: messages.length ? messages : undefined,
+    });
+    setSessionId(response.session_id);
+    await setJson(STORAGE_KEYS.lastSession, response.session_id);
+    return response.session_id;
+  }, [messages, serverUrl, sessionId]);
+
+  const fetchAiIntro = useCallback(
+    async (name, klass) => {
+      try {
+        const payload = {};
+        if (name) payload.name = name;
+        if (klass) payload.klass = klass;
+        const response = await Promise.race([
+          apiPost(serverUrl, "/api/intro", payload),
+          new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
+        return response?.intro || null;
+      } catch (error) {
+        return null;
+      }
+    },
+    [serverUrl]
+  );
+
+  const generateIntroViaChat = useCallback(
+    async (name, klass) => {
+      try {
+        const id = await ensureSession();
+        const identity = name && klass ? `${name} the ${klass}` : name || klass || "the hero";
+        const message = [
+          `Start a vivid opening scene in 2-4 sentences for ${identity}.`,
+          "Make it specific, atmospheric, and end with a direct question.",
+          "Avoid tavern starts and keep it punchy for mobile.",
+        ].join(" ");
+        const response = await apiPost(serverUrl, `/api/sessions/${id}/messages`, { message });
+        return (
+          response?.response ??
+          response?.assistant ??
+          response?.content ??
+          response?.narration ??
+          response?.message ??
+          null
+        );
+      } catch (error) {
+        return null;
+      }
+    },
+    [ensureSession, serverUrl]
+  );
+
+  const getIntro = useCallback(
+    async (name, klass) => {
+      const apiIntro = sanitizeIntro(await fetchAiIntro(name, klass));
+      if (apiIntro) return apiIntro;
+      const chatIntro = sanitizeIntro(await generateIntroViaChat(name, klass));
+      if (chatIntro) return chatIntro;
+      return pickFallbackIntro() || pickIntro();
+    },
+    [fetchAiIntro, generateIntroViaChat]
+  );
 
   const loadSession = useCallback(async () => {
     const storedId = await getJson(STORAGE_KEYS.lastSession, null);
     if (storedId) {
       setSessionId(storedId);
+      setAdventureLoading(false);
       return;
     }
-    const intro = pickIntro();
-    setMessages([{ role: "assistant", content: RULES_PROMPT }, { role: "assistant", content: intro }]);
-    setRulesSeeded(true);
-  }, []);
+    setAdventureLoading(true);
+    const intro = await getIntro();
+    setTimeout(() => {
+      setMessages([{ role: "assistant", content: intro }]);
+      setRulesSeeded(true);
+      setAdventureLoading(false);
+    }, 900);
+  }, [getIntro]);
 
   useEffect(() => {
     loadSession();
   }, [loadSession]);
 
   useEffect(() => {
-    if (!rulesSeeded && messages.length && messages[0]?.content !== RULES_PROMPT) {
-      setMessages((prev) => [{ role: "assistant", content: RULES_PROMPT }, ...prev]);
+    if (!rulesSeeded && messages.length) {
       setRulesSeeded(true);
     }
   }, [messages, rulesSeeded]);
+
+  useEffect(() => {
+    if (!adventureLoading) return;
+    const interval = setInterval(() => {
+      setLoadingFlavorIndex((prev) => (prev + 1) % LOADING_FLAVOR.length);
+    }, 900);
+    return () => clearInterval(interval);
+  }, [adventureLoading]);
 
   const loadCombatCatalogs = useCallback(async () => {
     try {
@@ -116,6 +246,7 @@ export default function StoryScreen({
         name: payload.name,
       }));
       setPcs(pcList);
+      setPcCatalog(premadeSource || {});
       if (!pcId && pcList[0]) setPcId(pcList[0].id);
       if (!enemyId && enemyList[0]) setEnemyId(enemyList[0].id);
     } catch (error) {
@@ -225,18 +356,6 @@ export default function StoryScreen({
     }
   }, [serverUrl, rulesSessionId, shouldNarrate]);
 
-  const ensureSession = useCallback(async () => {
-    if (sessionId) {
-      return sessionId;
-    }
-    const response = await apiPost(serverUrl, "/api/sessions", {
-      messages: messages.length ? messages : undefined,
-    });
-    setSessionId(response.session_id);
-    await setJson(STORAGE_KEYS.lastSession, response.session_id);
-    return response.session_id;
-  }, [messages, serverUrl, sessionId]);
-
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim();
     if (!trimmed || loading) return;
@@ -295,15 +414,26 @@ export default function StoryScreen({
     if (!characterEntry) return;
     const name = characterEntry.name || "Adventurer";
     const klass = characterEntry.klass || "Hero";
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: `${name} the ${klass} steps into the tale. The world listens.`,
-      },
-    ]);
-    onCharacterEntryHandled?.();
-  }, [characterEntry, onCharacterEntryHandled]);
+    setAdventureLoading(true);
+    let isActive = true;
+    getIntro(name, klass).then((intro) => {
+      if (!isActive) return;
+      setTimeout(() => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: intro,
+          },
+        ]);
+        setAdventureLoading(false);
+        onCharacterEntryHandled?.();
+      }, 900);
+    });
+    return () => {
+      isActive = false;
+    };
+  }, [characterEntry, onCharacterEntryHandled, getIntro]);
 
   const checkModeButtons = useMemo(
     () => [
@@ -314,25 +444,16 @@ export default function StoryScreen({
     []
   );
 
-  const buildCheckPayload = useCallback(() => {
-    const payload = {};
-    if (checkMode === "skill" && checkSkill) {
-      payload.skill = checkSkill.toLowerCase();
-    }
-    if (checkMode === "ability" && checkAbility) {
-      payload.ability = checkAbility.toLowerCase();
-    }
-    if (checkMode === "save" && checkSave) {
-      payload.save = checkSave.toLowerCase();
-    }
-    return payload;
-  }, [checkAbility, checkMode, checkSave, checkSkill]);
-
   const ensureCheckSession = useCallback(async () => {
     return ensureRulesSession(false);
   }, [ensureRulesSession]);
 
-  const performCheck = useCallback(async () => {
+  const buildCheckContext = useCallback(() => {
+    const recent = messages.slice(-2).map((msg) => msg.content).join(" ");
+    return recent || "Combat check.";
+  }, [messages]);
+
+  const runCheck = useCallback(async (payload, label) => {
     if (checkBusy) return;
     if (checkUsed) {
       setMessages((prev) => [
@@ -344,20 +465,24 @@ export default function StoryScreen({
     setCheckBusy(true);
     try {
       const id = await ensureCheckSession();
-      const payload = buildCheckPayload();
-      if (checkDc) {
-        payload.dc = Number(checkDc) || 15;
-      }
-      if (checkContext) {
-        payload.context = checkContext;
-      }
+      const context = buildCheckContext();
+      const dcResponse = await apiPost(
+        serverUrl,
+        `/api/rules/sessions/${id}/dc`,
+        { ...payload, context }
+      );
+      const dc = Number(dcResponse?.dc) || 15;
       const narrate = shouldNarrate();
       const response = await apiPost(
         serverUrl,
         `/api/rules/sessions/${id}/skill_check${narrate ? "?narrate=true" : ""}`,
-        payload
+        { ...payload, dc }
       );
       setCheckResult(response);
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `${label} = ${response?.total ?? "-"}` },
+      ]);
       if (response?.narration) {
         setMessages((prev) => [
           ...prev,
@@ -371,45 +496,34 @@ export default function StoryScreen({
       setCheckBusy(false);
     }
   }, [
-    buildCheckPayload,
+    buildCheckContext,
     checkBusy,
     checkUsed,
-    checkContext,
-    checkDc,
     ensureCheckSession,
     serverUrl,
     shouldNarrate,
   ]);
 
-  const suggestCheckDc = useCallback(async () => {
-    if (checkBusy) return;
-    setCheckBusy(true);
-    try {
-      const id = await ensureCheckSession();
-      const payload = buildCheckPayload();
-      if (checkContext) {
-        payload.context = checkContext;
-      }
-      const response = await apiPost(
-        serverUrl,
-        `/api/rules/sessions/${id}/dc`,
-        payload
-      );
-      if (response?.dc) {
-        setCheckDc(String(response.dc));
-      }
-    } catch (error) {
-      console.error("DC suggestion failed", error);
-    } finally {
-      setCheckBusy(false);
-    }
-  }, [
-    buildCheckPayload,
-    checkBusy,
-    checkContext,
-    ensureCheckSession,
-    serverUrl,
-  ]);
+  const handleSkillCheck = useCallback(
+    (skill) => {
+      runCheck({ skill: skill.toLowerCase() }, `${skill} check`);
+    },
+    [runCheck]
+  );
+
+  const handleAbilityCheck = useCallback(
+    (ability) => {
+      runCheck({ ability }, `${ability.toUpperCase()} check`);
+    },
+    [runCheck]
+  );
+
+  const handleSaveCheck = useCallback(
+    (ability) => {
+      runCheck({ save: ability }, `${ability.toUpperCase()} save`);
+    },
+    [runCheck]
+  );
   const toggleDrawer = useCallback(() => {
     setDrawerExpanded((prev) => !prev);
   }, []);
@@ -495,10 +609,18 @@ export default function StoryScreen({
           style={styles.list}
           keyboardShouldPersistTaps="handled"
         />
-        {loading && (
+        {loading && !adventureLoading && (
           <View style={styles.loadingOverlay} pointerEvents="none">
             <ActivityIndicator size="large" color={colors.gold} />
             <Text style={styles.loadingLabel}>The GM is thinking...</Text>
+          </View>
+        )}
+        {adventureLoading && !loading && (
+          <View style={styles.loadingOverlay} pointerEvents="none">
+            <ActivityIndicator size="large" color={colors.gold} />
+            <Text style={styles.loadingLabel}>
+              Loading adventure: {LOADING_FLAVOR[loadingFlavorIndex]}
+            </Text>
           </View>
         )}
       </View>
@@ -581,11 +703,6 @@ export default function StoryScreen({
                 onPress={() => onNavigate?.("spells")}
                 variant="ghost"
               />
-              <Button
-                label="Checks"
-                onPress={() => onNavigate?.("checks")}
-                variant="ghost"
-              />
             </View>
             <View style={styles.drawerButtonRow}>
               <Button
@@ -636,60 +753,58 @@ export default function StoryScreen({
                 ))}
               </View>
               {checkMode === "skill" ? (
-                <TextInput
-                  style={styles.drawerInput}
-                  value={checkSkill}
-                  onChangeText={setCheckSkill}
-                  placeholder="Skill (e.g. stealth)"
-                  placeholderTextColor={colors.mutedGold}
-                />
+                skillOptions.length ? (
+                  <View style={styles.drawerButtonRow}>
+                    {skillOptions.map((skill) => {
+                      const label = skill
+                        .split(" ")
+                        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+                        .join(" ");
+                      return (
+                        <Button
+                          key={skill}
+                          label={label}
+                          onPress={() => handleSkillCheck(skill)}
+                          disabled={checkBusy || checkUsed}
+                          variant="ghost"
+                        />
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <Text style={styles.muted}>No skills available.</Text>
+                )
               ) : null}
               {checkMode === "ability" ? (
-                <TextInput
-                  style={styles.drawerInput}
-                  value={checkAbility}
-                  onChangeText={setCheckAbility}
-                  placeholder="Ability (str)"
-                  placeholderTextColor={colors.mutedGold}
-                />
+                <View style={styles.drawerButtonRow}>
+                  {abilityOptions.map((ability) => (
+                    <Button
+                      key={ability}
+                      label={ability.toUpperCase()}
+                      onPress={() => handleAbilityCheck(ability)}
+                      disabled={checkBusy || checkUsed}
+                      variant="ghost"
+                    />
+                  ))}
+                </View>
               ) : null}
               {checkMode === "save" ? (
-                <TextInput
-                  style={styles.drawerInput}
-                  value={checkSave}
-                  onChangeText={setCheckSave}
-                  placeholder="Saving throw (wis)"
-                  placeholderTextColor={colors.mutedGold}
-                />
+                saveOptions.length ? (
+                  <View style={styles.drawerButtonRow}>
+                    {saveOptions.map((ability) => (
+                      <Button
+                        key={ability}
+                        label={`${ability.toUpperCase()} Save`}
+                        onPress={() => handleSaveCheck(ability)}
+                        disabled={checkBusy || checkUsed}
+                        variant="ghost"
+                      />
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.muted}>No saves available.</Text>
+                )
               ) : null}
-              <TextInput
-                style={styles.drawerInput}
-                value={checkDc}
-                onChangeText={setCheckDc}
-                keyboardType="numeric"
-                placeholder="DC"
-                placeholderTextColor={colors.mutedGold}
-              />
-              <TextInput
-                style={styles.drawerInput}
-                value={checkContext}
-                onChangeText={setCheckContext}
-                placeholder="Context (optional)"
-                placeholderTextColor={colors.mutedGold}
-              />
-              <View style={styles.drawerButtonRow}>
-                <Button
-                  label={checkBusy ? "..." : "Suggest DC"}
-                  onPress={suggestCheckDc}
-                  variant="ghost"
-                  disabled={checkBusy}
-                />
-                <Button
-                  label={checkBusy ? "..." : "Roll Check"}
-                  onPress={performCheck}
-                  disabled={checkBusy || checkUsed}
-                />
-              </View>
               {checkUsed ? (
                 <Text style={styles.muted}>Check used this turn.</Text>
               ) : null}
