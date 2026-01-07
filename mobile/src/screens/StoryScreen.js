@@ -63,6 +63,7 @@ export default function StoryScreen({
   const [checkContext, setCheckContext] = useState("");
   const [checkResult, setCheckResult] = useState(null);
   const [checkBusy, setCheckBusy] = useState(false);
+  const [checkUsed, setCheckUsed] = useState(false);
   const [rulesSeeded, setRulesSeeded] = useState(false);
 
   const loadSession = useCallback(async () => {
@@ -125,10 +126,11 @@ export default function StoryScreen({
     loadCombatCatalogs();
   }, [loadCombatCatalogs]);
 
-  const startCombat = useCallback(async () => {
-    if (!pcId || !enemyId) return;
-    setCombatBusy(true);
-    try {
+  const createRulesSession = useCallback(
+    async (announce = false) => {
+      if (!pcId || !enemyId) {
+        throw new Error("Select a combatant first.");
+      }
       const response = await apiPost(serverUrl, "/api/rules/sessions", {
         pc_id: pcId,
         enemy_id: enemyId,
@@ -143,19 +145,39 @@ export default function StoryScreen({
         }))
       );
       setWeaponId(weaponKeys[0] || null);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `Combat starts: ${response.pc?.name} vs ${response.enemy?.name}.`,
-        },
-      ]);
+      if (announce) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `Combat starts: ${response.pc?.name} vs ${response.enemy?.name}.`,
+          },
+        ]);
+      }
+      return response.session_id;
+    },
+    [serverUrl, pcId, enemyId]
+  );
+
+  const ensureRulesSession = useCallback(
+    async (announce = false) => {
+      if (rulesSessionId) return rulesSessionId;
+      return createRulesSession(announce);
+    },
+    [rulesSessionId, createRulesSession]
+  );
+
+  const startCombat = useCallback(async () => {
+    if (!pcId || !enemyId) return;
+    setCombatBusy(true);
+    try {
+      await ensureRulesSession(true);
     } catch (error) {
       console.error("Failed to start combat", error);
     } finally {
       setCombatBusy(false);
     }
-  }, [serverUrl, pcId, enemyId]);
+  }, [ensureRulesSession, pcId, enemyId]);
 
   const runAttack = useCallback(async () => {
     if (!rulesSessionId) return;
@@ -190,6 +212,7 @@ export default function StoryScreen({
         response.narration ||
         `${response.attacker} strikes: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
       setMessages((prev) => [...prev, { role: "assistant", content: narration }]);
+      setCheckUsed(false);
     } catch (error) {
       console.error("Enemy turn failed", error);
     } finally {
@@ -301,14 +324,18 @@ export default function StoryScreen({
   }, [checkAbility, checkMode, checkSave, checkSkill]);
 
   const ensureCheckSession = useCallback(async () => {
-    if (!pcId || !enemyId) {
-      throw new Error("Select a combatant first.");
-    }
-    return ensureSession();
-  }, [ensureSession, enemyId, pcId]);
+    return ensureRulesSession(false);
+  }, [ensureRulesSession]);
 
   const performCheck = useCallback(async () => {
     if (checkBusy) return;
+    if (checkUsed) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Only one check per turn." },
+      ]);
+      return;
+    }
     setCheckBusy(true);
     try {
       const id = await ensureCheckSession();
@@ -325,6 +352,7 @@ export default function StoryScreen({
         payload
       );
       setCheckResult(response);
+      setCheckUsed(true);
     } catch (error) {
       console.error("Check failed", error);
     } finally {
@@ -398,6 +426,10 @@ export default function StoryScreen({
     if (rulesSessionId) {
       setDrawerExpanded(true);
     }
+  }, [rulesSessionId]);
+
+  useEffect(() => {
+    setCheckUsed(false);
   }, [rulesSessionId]);
 
   useEffect(() => {
@@ -641,9 +673,12 @@ export default function StoryScreen({
                 <Button
                   label={checkBusy ? "..." : "Roll Check"}
                   onPress={performCheck}
-                  disabled={checkBusy}
+                  disabled={checkBusy || checkUsed}
                 />
               </View>
+              {checkUsed ? (
+                <Text style={styles.muted}>Check used this turn.</Text>
+              ) : null}
               {checkResult ? (
                 <View style={styles.checkResult}>
                   <Text style={styles.checkResultText}>
