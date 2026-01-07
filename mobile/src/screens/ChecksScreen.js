@@ -4,6 +4,7 @@ import Button from "../components/Button";
 import Section from "../components/Section";
 import { apiGet, apiPost } from "../api/client";
 import { colors, radius, spacing } from "../theme";
+import { DEFAULT_ENEMIES, DEFAULT_PREMADES } from "../data/dnd";
 
 export default function ChecksScreen({ serverUrl }) {
   const [pcs, setPcs] = useState([]);
@@ -19,6 +20,7 @@ export default function ChecksScreen({ serverUrl }) {
   const [context, setContext] = useState("");
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  const shouldNarrate = useCallback(() => Math.random() < 0.5, []);
 
   const loadCatalogs = useCallback(async () => {
     try {
@@ -26,13 +28,25 @@ export default function ChecksScreen({ serverUrl }) {
         apiGet(serverUrl, "/api/rules/premades"),
         apiGet(serverUrl, "/api/bestiary"),
       ]);
-      const pcList = Object.entries(premades || {}).map(([id, payload]) => ({
+      const premadeSource =
+        premades ||
+        DEFAULT_PREMADES.reduce((acc, entry) => {
+          acc[entry.id] = entry;
+          return acc;
+        }, {});
+      const bestiarySource =
+        bestiary ||
+        DEFAULT_ENEMIES.reduce((acc, entry) => {
+          acc[entry.id] = entry;
+          return acc;
+        }, {});
+      const pcList = Object.entries(premadeSource).map(([id, payload]) => ({
         id,
         name: payload.name,
-        klass: payload.class,
+        klass: payload.class ?? payload.klass,
         level: payload.level,
       }));
-      const enemyList = Object.entries(bestiary || {}).map(([id, payload]) => ({
+      const enemyList = Object.entries(bestiarySource).map(([id, payload]) => ({
         id,
         name: payload.name,
         source: payload.source,
@@ -100,9 +114,10 @@ export default function ChecksScreen({ serverUrl }) {
     try {
       const id = await ensureSession();
       const payload = buildPayload();
+      const narrate = shouldNarrate();
       const response = await apiPost(
         serverUrl,
-        `/api/rules/sessions/${id}/skill_check`,
+        `/api/rules/sessions/${id}/skill_check${narrate ? "?narrate=true" : ""}`,
         payload
       );
       setResult(response);
@@ -111,7 +126,7 @@ export default function ChecksScreen({ serverUrl }) {
     } finally {
       setBusy(false);
     }
-  }, [ensureSession, buildPayload, serverUrl]);
+  }, [ensureSession, buildPayload, serverUrl, shouldNarrate]);
 
   const modeButtons = useMemo(
     () => [
@@ -235,6 +250,9 @@ export default function ChecksScreen({ serverUrl }) {
             <Text style={styles.resultText}>
               Success: {result.success ? "Yes" : "No"}
             </Text>
+            {result.narration ? (
+              <Text style={styles.resultText}>{result.narration}</Text>
+            ) : null}
           </View>
         ) : (
           <Text style={styles.muted}>No check yet.</Text>

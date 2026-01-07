@@ -65,6 +65,7 @@ export default function StoryScreen({
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkUsed, setCheckUsed] = useState(false);
   const [rulesSeeded, setRulesSeeded] = useState(false);
+  const shouldNarrate = useCallback(() => Math.random() < 0.5, []);
 
   const loadSession = useCallback(async () => {
     const storedId = await getJson(STORAGE_KEYS.lastSession, null);
@@ -183,42 +184,46 @@ export default function StoryScreen({
     if (!rulesSessionId) return;
     setCombatBusy(true);
     try {
+      const narrate = shouldNarrate();
       const response = await apiPost(
         serverUrl,
-        `/api/rules/sessions/${rulesSessionId}/attack`,
+        `/api/rules/sessions/${rulesSessionId}/attack${narrate ? "?narrate=true" : ""}`,
         { weapon_id: weaponId || undefined }
       );
-      const narration =
-        response.narration ||
-        `${response.attacker} attacks: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
-      setMessages((prev) => [...prev, { role: "assistant", content: narration }]);
+      const summary = `${response.attacker} attacks: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
+      setMessages((prev) => [...prev, { role: "assistant", content: summary }]);
+      if (response?.narration) {
+        setMessages((prev) => [...prev, { role: "assistant", content: response.narration }]);
+      }
     } catch (error) {
       console.error("Attack failed", error);
     } finally {
       setCombatBusy(false);
     }
-  }, [serverUrl, rulesSessionId, weaponId]);
+  }, [serverUrl, rulesSessionId, weaponId, shouldNarrate]);
 
   const runEnemyTurn = useCallback(async () => {
     if (!rulesSessionId) return;
     setCombatBusy(true);
     try {
+      const narrate = shouldNarrate();
       const response = await apiPost(
         serverUrl,
-        `/api/rules/sessions/${rulesSessionId}/enemy_turn`,
+        `/api/rules/sessions/${rulesSessionId}/enemy_turn${narrate ? "?narrate=true" : ""}`,
         {}
       );
-      const narration =
-        response.narration ||
-        `${response.attacker} strikes: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
-      setMessages((prev) => [...prev, { role: "assistant", content: narration }]);
+      const summary = `${response.attacker} strikes: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
+      setMessages((prev) => [...prev, { role: "assistant", content: summary }]);
+      if (response?.narration) {
+        setMessages((prev) => [...prev, { role: "assistant", content: response.narration }]);
+      }
       setCheckUsed(false);
     } catch (error) {
       console.error("Enemy turn failed", error);
     } finally {
       setCombatBusy(false);
     }
-  }, [serverUrl, rulesSessionId]);
+  }, [serverUrl, rulesSessionId, shouldNarrate]);
 
   const ensureSession = useCallback(async () => {
     if (sessionId) {
@@ -346,12 +351,19 @@ export default function StoryScreen({
       if (checkContext) {
         payload.context = checkContext;
       }
+      const narrate = shouldNarrate();
       const response = await apiPost(
         serverUrl,
-        `/api/rules/sessions/${id}/skill_check`,
+        `/api/rules/sessions/${id}/skill_check${narrate ? "?narrate=true" : ""}`,
         payload
       );
       setCheckResult(response);
+      if (response?.narration) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: response.narration },
+        ]);
+      }
       setCheckUsed(true);
     } catch (error) {
       console.error("Check failed", error);
@@ -361,10 +373,12 @@ export default function StoryScreen({
   }, [
     buildCheckPayload,
     checkBusy,
+    checkUsed,
     checkContext,
     checkDc,
     ensureCheckSession,
     serverUrl,
+    shouldNarrate,
   ]);
 
   const suggestCheckDc = useCallback(async () => {
