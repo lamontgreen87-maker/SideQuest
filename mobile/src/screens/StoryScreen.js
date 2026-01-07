@@ -78,7 +78,10 @@ export default function StoryScreen({
   onNavigate,
   characterEntry,
   onCharacterEntryHandled,
+  sessionEntry,
+  onSessionEntryHandled,
 }) {
+  const messageSeq = useRef(0);
   const [sessionId, setSessionId] = useState(storyCache.sessionId);
   const [messages, setMessages] = useState(
     storyCache.messages.length ? storyCache.messages : []
@@ -104,6 +107,18 @@ export default function StoryScreen({
   const [loadingFlavorIndex, setLoadingFlavorIndex] = useState(0);
   const shouldNarrate = useCallback(() => Math.random() < 0.5, []);
   const selectedPc = useMemo(() => pcCatalog[pcId] || null, [pcCatalog, pcId]);
+  const buildSessionTitle = useCallback((list) => {
+    const firstAssistant = list.find((msg) => msg.role === "assistant");
+    const raw = firstAssistant?.content || "New Adventure";
+    const cleaned = raw.replace(/\s+/g, " ").trim();
+    return cleaned.length > 48 ? `${cleaned.slice(0, 48)}...` : cleaned;
+  }, []);
+  const buildSessionPreview = useCallback((list) => {
+    const lastAssistant = [...list].reverse().find((msg) => msg.role === "assistant");
+    const raw = lastAssistant?.content || "";
+    const cleaned = raw.replace(/\s+/g, " ").trim();
+    return cleaned.length > 80 ? `${cleaned.slice(0, 80)}...` : cleaned;
+  }, []);
   const skillOptions = useMemo(
     () => selectedPc?.skill_proficiencies || [],
     [selectedPc]
@@ -117,6 +132,22 @@ export default function StoryScreen({
     const found = ABILITY_ORDER.filter((key) => stats[key] != null);
     return found.length ? found : ABILITY_ORDER;
   }, [selectedPc]);
+  const isRemoteServer = useMemo(
+    () => typeof serverUrl === "string" && serverUrl.includes("sidequestai.org"),
+    [serverUrl]
+  );
+  const makeMessage = useCallback((role, content) => {
+    return {
+      id: `${Date.now()}-${messageSeq.current++}`,
+      role,
+      content,
+    };
+  }, []);
+  const shouldCheckStatus = useCallback((errorMessage) => {
+    if (!errorMessage) return false;
+    const text = String(errorMessage).toLowerCase();
+    return text.includes("524") || text.includes("timeout") || text.includes("timed out");
+  }, []);
 
   const ensureSession = useCallback(async () => {
     if (sessionId) {
@@ -189,6 +220,11 @@ export default function StoryScreen({
     const storedId = await getJson(STORAGE_KEYS.lastSession, null);
     if (storedId) {
       setSessionId(storedId);
+      const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
+      const entry = storedSessions.find((session) => session.id === storedId);
+      if (entry?.messages?.length) {
+        setMessages(entry.messages);
+      }
       setAdventureLoading(false);
       return;
     }
@@ -361,12 +397,14 @@ export default function StoryScreen({
     if (!trimmed || loading) return;
     setLoading(true);
     setInput("");
-    const nextMessages = [...messages, { role: "user", content: trimmed }];
+    const nextMessages = [...messages, makeMessage("user", trimmed)];
     setMessages(nextMessages);
+    let id = null;
     try {
-      const id = await ensureSession();
+      id = await ensureSession();
       const response = await apiPost(serverUrl, `/api/sessions/${id}/messages`, {
         message: trimmed,
+        fast: isRemoteServer ? true : undefined,
       });
       const aiContent =
         response?.response ??
@@ -375,30 +413,53 @@ export default function StoryScreen({
         response?.narration ??
         response?.message;
       if (aiContent) {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: aiContent },
-        ]);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && last?.content === aiContent) {
+            return prev;
+          }
+          return [...prev, makeMessage("assistant", aiContent)];
+        });
       }
       if (response?.credits && onCreditsUpdate) {
         onCreditsUpdate(response.credits);
       }
     } catch (error) {
-      const errorMessage =
-        error?.message && error.message.length < 300
-          ? error.message
-          : "Stream failed. Try again.";
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: errorMessage },
-      ]);
+      const errorMessage = error?.message || "Request failed.";
+      const canCheck = shouldCheckStatus(errorMessage) && id;
+      if (canCheck) {
+        try {
+          const status = await apiGet(serverUrl, `/api/sessions/${id}/status`);
+          const serverReply = status?.last_assistant_message;
+          if (!status?.pending_reply && serverReply) {
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.role === "assistant" && last?.content === serverReply) {
+                return prev;
+              }
+              return [...prev, makeMessage("assistant", serverReply)];
+            });
+            return;
+          }
+          setMessages((prev) => [
+            ...prev,
+            makeMessage("assistant", "Still thinking... try again in a moment."),
+          ]);
+          return;
+        } catch (statusError) {
+          // fall through to default error message
+        }
+      }
+      const briefError =
+        errorMessage.length < 300 ? errorMessage : "Request failed. Try again.";
+      setMessages((prev) => [...prev, makeMessage("assistant", briefError)]);
     } finally {
       setLoading(false);
     }
   }, [input, loading, messages, ensureSession, serverUrl, onCreditsUpdate]);
 
   const data = useMemo(
-    () => messages.map((msg, index) => ({ id: `${index}`, ...msg })),
+    () => messages.map((msg, index) => ({ id: msg.id ?? `${index}`, ...msg })),
     [messages]
   );
 
@@ -409,6 +470,41 @@ export default function StoryScreen({
   useEffect(() => {
     storyCache.sessionId = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !messages.length) return;
+    const persist = async () => {
+      const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
+      const entry = {
+        id: sessionId,
+        title: buildSessionTitle(messages),
+        preview: buildSessionPreview(messages),
+        updatedAt: Date.now(),
+        messages,
+      };
+      const next = [
+        entry,
+        ...storedSessions.filter((session) => session.id !== sessionId),
+      ].slice(0, 20);
+      await setJson(STORAGE_KEYS.sessions, next);
+    };
+    persist();
+  }, [sessionId, messages, buildSessionTitle, buildSessionPreview]);
+
+  useEffect(() => {
+    if (!sessionEntry) return;
+    const entryMessages = sessionEntry.messages || [];
+    if (sessionEntry.id) {
+      setSessionId(sessionEntry.id);
+      setJson(STORAGE_KEYS.lastSession, sessionEntry.id);
+    }
+    if (entryMessages.length) {
+      setMessages(entryMessages);
+      setRulesSeeded(true);
+      setAdventureLoading(false);
+    }
+    onSessionEntryHandled?.();
+  }, [sessionEntry, onSessionEntryHandled]);
 
   useEffect(() => {
     if (!characterEntry) return;

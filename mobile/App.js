@@ -1,12 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { BackHandler, Modal, Pressable, StatusBar, StyleSheet, Text, View } from "react-native";
+import {
+  BackHandler,
+  Modal,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import * as NavigationBar from "expo-navigation-bar";
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from "@expo-google-fonts/cinzel";
 import { WalletConnectModal, useWalletConnectModal } from "@walletconnect/modal-react-native";
 import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import CharacterScreen from "./src/screens/CharacterScreen";
-import PlaceholderScreen from "./src/screens/PlaceholderScreen";
 import BestiaryScreen from "./src/screens/BestiaryScreen";
 import SpellsScreen from "./src/screens/SpellsScreen";
 import StoryScreen from "./src/screens/StoryScreen";
@@ -24,7 +33,7 @@ import {
   WALLETCONNECT_METADATA,
   WALLETCONNECT_PROJECT_ID,
 } from "./src/config";
-import { getItem, removeItem, setItem } from "./src/storage";
+import { getItem, getJson, removeItem, setItem } from "./src/storage";
 import { colors, radius, spacing } from "./src/theme";
 
 if (typeof BackHandler.removeEventListener !== "function") {
@@ -77,6 +86,9 @@ export default function App() {
   const [credits, setCredits] = useState(0);
   const [activeTab, setActiveTab] = useState("story");
   const [creationVisible, setCreationVisible] = useState(false);
+  const [sessionsVisible, setSessionsVisible] = useState(false);
+  const [sessionList, setSessionList] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [authStatus, setAuthStatus] = useState({ loading: false, error: null });
   const [walletStatus, setWalletStatus] = useState({});
   const [updateStatus, setUpdateStatus] = useState({
@@ -91,7 +103,6 @@ export default function App() {
       { id: "story", label: "Story" },
       { id: "spells", label: "Spells" },
       { id: "bestiary", label: "Bestiary" },
-      { id: "character", label: "Character" },
       { id: "settings", label: "Settings" },
     ],
     []
@@ -314,11 +325,10 @@ export default function App() {
   const serverOnline = !walletStatus.healthError;
   const goToSettings = useCallback(() => setActiveTab("settings"), [setActiveTab]);
   const goToBestiary = useCallback(() => setActiveTab("bestiary"), [setActiveTab]);
-  const goToStoryTab = useCallback(() => setActiveTab("story"), [setActiveTab]);
-  const goToCharacterTab = useCallback(() => setActiveTab("character"), [setActiveTab]);
   const openCharacterCreator = useCallback(() => setCreationVisible(true), []);
   const closeCharacterCreator = useCallback(() => setCreationVisible(false), []);
   const [pendingCharacterEntry, setPendingCharacterEntry] = useState(null);
+  const [pendingSessionEntry, setPendingSessionEntry] = useState(null);
   const handleCharacterCreated = useCallback(
     (character) => {
       closeCharacterCreator();
@@ -330,6 +340,28 @@ export default function App() {
   const handleStoryEntryConsumed = useCallback(() => {
     setPendingCharacterEntry(null);
   }, []);
+  const handleSessionEntryConsumed = useCallback(() => {
+    setPendingSessionEntry(null);
+  }, []);
+  const openSessions = useCallback(async () => {
+    setSessionsVisible(true);
+    setSessionsLoading(true);
+    const stored = await getJson(STORAGE_KEYS.sessions, []);
+    const sorted = [...stored].sort(
+      (left, right) => (right.updatedAt || 0) - (left.updatedAt || 0)
+    );
+    setSessionList(sorted);
+    setSessionsLoading(false);
+  }, []);
+  const closeSessions = useCallback(() => setSessionsVisible(false), []);
+  const handleSessionSelect = useCallback(
+    (entry) => {
+      setPendingSessionEntry({ ...entry, timestamp: Date.now() });
+      setSessionsVisible(false);
+      setActiveTab("story");
+    },
+    [setActiveTab]
+  );
   const actionButtons = useMemo(
     () => [
       {
@@ -342,16 +374,10 @@ export default function App() {
         id: "sessions",
         label: "Sessions",
         variant: "ghost",
-        onPress: goToStoryTab,
-      },
-      {
-        id: "sheet",
-        label: "Sheet",
-        variant: "ghost",
-        onPress: goToCharacterTab,
+        onPress: openSessions,
       },
     ],
-    [goToStoryTab, goToCharacterTab, openCharacterCreator]
+    [openSessions, openCharacterCreator]
   );
   const activeContent = useMemo(() => {
     switch (activeTab) {
@@ -363,19 +389,14 @@ export default function App() {
           onNavigate={setActiveTab}
           characterEntry={pendingCharacterEntry}
           onCharacterEntryHandled={handleStoryEntryConsumed}
+          sessionEntry={pendingSessionEntry}
+          onSessionEntryHandled={handleSessionEntryConsumed}
         />
       );
       case "spells":
         return <SpellsScreen serverUrl={serverUrl} />;
       case "bestiary":
         return <BestiaryScreen serverUrl={serverUrl} />;
-      case "character":
-        return (
-          <CharacterScreen
-            serverUrl={serverUrl}
-            onCharacterCreated={handleCharacterCreated}
-          />
-        );
       case "settings":
         return (
           <SettingsScreen
@@ -399,6 +420,8 @@ export default function App() {
     setCredits,
     pendingCharacterEntry,
     handleStoryEntryConsumed,
+    pendingSessionEntry,
+    handleSessionEntryConsumed,
     handleCharacterCreated,
     saveServerUrl,
     refreshServerUrl,
@@ -467,7 +490,7 @@ export default function App() {
         transparent={false}
         onRequestClose={closeCharacterCreator}
       >
-        <View style={modalStyles.fullScreen}>
+        <SafeAreaView style={modalStyles.fullScreen}>
           <View style={modalStyles.modalHeader}>
             <Text style={modalStyles.modalTitle}>Character Creation</Text>
             <Pressable onPress={closeCharacterCreator} style={modalStyles.closeButton}>
@@ -479,6 +502,53 @@ export default function App() {
               serverUrl={serverUrl}
               onCharacterCreated={handleCharacterCreated}
             />
+          </View>
+        </SafeAreaView>
+      </Modal>
+      <Modal
+        visible={sessionsVisible}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        transparent={false}
+        onRequestClose={closeSessions}
+      >
+        <View style={modalStyles.fullScreen}>
+          <View style={modalStyles.modalHeader}>
+            <Text style={modalStyles.modalTitle}>Sessions</Text>
+            <Pressable onPress={closeSessions} style={modalStyles.closeButton}>
+              <Text style={modalStyles.closeLabel}>Close</Text>
+            </Pressable>
+          </View>
+          <View style={modalStyles.modalBody}>
+            {sessionsLoading ? (
+              <Text style={modalStyles.emptyLabel}>Loading sessions...</Text>
+            ) : sessionList.length ? (
+              <ScrollView contentContainerStyle={modalStyles.sessionList}>
+                {sessionList.map((session) => (
+                  <Pressable
+                    key={session.id}
+                    style={modalStyles.sessionCard}
+                    onPress={() => handleSessionSelect(session)}
+                  >
+                    <Text style={modalStyles.sessionTitle}>
+                      {session.title || "Adventure"}
+                    </Text>
+                    {session.preview ? (
+                      <Text style={modalStyles.sessionPreview}>
+                        {session.preview}
+                      </Text>
+                    ) : null}
+                    <Text style={modalStyles.sessionMeta}>
+                      {session.updatedAt
+                        ? new Date(session.updatedAt).toLocaleString()
+                        : "Saved"}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={modalStyles.emptyLabel}>No sessions yet.</Text>
+            )}
           </View>
         </View>
       </Modal>
@@ -502,6 +572,12 @@ const modalStyles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 0,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.panel,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   modalTitle: {
     color: colors.parchment,
@@ -521,5 +597,40 @@ const modalStyles = StyleSheet.create({
     flex: 1,
     width: "100%",
     alignSelf: "stretch",
+    paddingHorizontal: spacing.lg,
+    minHeight: 0,
+  },
+  sessionList: {
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  sessionCard: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.panelAlt,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  sessionTitle: {
+    color: colors.parchment,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  sessionPreview: {
+    color: colors.mutedGold,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  sessionMeta: {
+    color: colors.mutedGold,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  emptyLabel: {
+    color: colors.mutedGold,
+    fontSize: 12,
+    padding: spacing.lg,
   },
 });

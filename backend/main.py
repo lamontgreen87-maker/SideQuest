@@ -41,6 +41,7 @@ logger = logging.getLogger("uvicorn.error")
 # --- App Configuration ---
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama3")
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "55"))
 API_KEY = os.getenv("API_KEY")
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
 ADMIN_KEY = os.getenv("ADMIN_KEY")
@@ -354,6 +355,7 @@ class PaymentStatusResponse(BaseModel):
 
 sessions: Dict[str, Dict[str, Any]] = {}
 rules_sessions: Dict[str, RulesSession] = {}
+SESSIONS_STORE_PATH = os.getenv("SESSIONS_STORE_PATH", os.path.join(os.path.dirname(__file__), "sessions_store.json"))
 RULES_STORE_PATH = os.getenv("RULES_STORE_PATH", os.path.join(os.path.dirname(__file__), "rules_store.json"))
 CHARACTER_STORE_PATH = os.getenv(
     "CHARACTER_STORE_PATH", os.path.join(os.path.dirname(__file__), "characters_store.json")
@@ -414,6 +416,18 @@ def persist_rules_sessions() -> None:
     data = {session_id: serialize_rules_session(session) for session_id, session in rules_sessions.items()}
     with open(RULES_STORE_PATH, "w", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=True, indent=2)
+
+def load_sessions() -> Dict[str, Dict[str, Any]]:
+    payload = load_simple_store(SESSIONS_STORE_PATH)
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+def persist_sessions() -> None:
+    save_simple_store(SESSIONS_STORE_PATH, sessions)
+
+def stamp_now() -> str:
+    return datetime.utcnow().isoformat()
 
 def load_json_store(path: str, key: str) -> Dict[str, Dict[str, Any]]:
     if not os.path.exists(path):
@@ -1053,7 +1067,7 @@ async def ollama_chat(messages: List[Dict[str, str]], fast: bool) -> str:
         "stream": False,
         "options": build_ollama_options(fast),
     }
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
         response.raise_for_status()
         data = response.json()
@@ -1066,7 +1080,7 @@ async def ollama_generate(prompt: str, fast: bool) -> str:
         "stream": False,
         "options": build_ollama_options(fast),
     }
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
         response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
         response.raise_for_status()
         data = response.json()
@@ -1078,7 +1092,7 @@ async def ollama_generate_basic(prompt: str) -> str:
         "prompt": prompt,
         "stream": False,
     }
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
         response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
         response.raise_for_status()
         data = response.json()
@@ -1196,6 +1210,9 @@ async def stream_response(
     session: Dict[str, Any], message: str, fast: bool, user: Optional[Dict[str, Any]] = None
 ) -> StreamingResponse:
     session["messages"].append({"role": "user", "content": message})
+    session["pending_reply"] = True
+    session["last_user_at"] = stamp_now()
+    persist_sessions()
 
     async def event_stream() -> AsyncGenerator[str, None]:
         assistant_parts: List[str] = []
@@ -1250,9 +1267,13 @@ async def stream_response(
             data = json.dumps({"delta": response_text})
             yield f"data: {data}\n\n"
         session["messages"].append({"role": "assistant", "content": response_text})
+        session["pending_reply"] = False
+        session["last_assistant_at"] = stamp_now()
+        session["last_assistant_message"] = response_text
         if user is not None:
             user["credits"] = max(0, int(user.get("credits", 0)) - 1)
             save_simple_store(USERS_STORE_PATH, users_store)
+        persist_sessions()
         yield "data: {\"done\": true}\n\n"
 
     headers = {
@@ -1266,6 +1287,8 @@ async def stream_response(
 @app.on_event("startup")
 async def startup_load_rules():
     load_rules_sessions()
+    global sessions
+    sessions = load_sessions()
     global custom_characters, custom_bestiary, bestiary_srd, spells_srd
     custom_characters = load_json_store(CHARACTER_STORE_PATH, "characters")
     custom_bestiary = load_json_store(BESTIARY_CUSTOM_PATH, "monsters")
@@ -1520,7 +1543,12 @@ async def create_session(payload: CreateSessionRequest, user: Dict[str, Any] = D
         "created_at": datetime.utcnow().isoformat(),
         "metadata": payload.metadata or {},
         "messages": messages,
+        "pending_reply": False,
+        "last_user_at": None,
+        "last_assistant_at": None,
+        "last_assistant_message": None,
     }
+    persist_sessions()
     return CreateSessionResponse(session_id=session_id)
 
 @app.post("/api/sessions/import", response_model=CreateSessionResponse, dependencies=[Depends(verify_api_key)])
@@ -1535,7 +1563,12 @@ async def import_session(payload: ImportSessionRequest, user: Dict[str, Any] = D
         "created_at": datetime.utcnow().isoformat(),
         "metadata": payload.metadata or {},
         "messages": messages,
+        "pending_reply": False,
+        "last_user_at": None,
+        "last_assistant_at": None,
+        "last_assistant_message": None,
     }
+    persist_sessions()
     return CreateSessionResponse(session_id=session_id)
 
 @app.post(
@@ -1552,6 +1585,8 @@ async def send_message(
     if user.get("credits", 0) <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
     session["messages"].append({"role": "user", "content": payload.message})
+    session["pending_reply"] = True
+    session["last_user_at"] = stamp_now()
     fast = bool(payload.fast)
     try:
         response_text = await generate_min_response(session["messages"], fast, 28)
@@ -1561,11 +1596,18 @@ async def send_message(
             response_text = await generate_min_response(retry_context, fast, 28)
             if response_text.strip() == last_assistant.strip():
                 response_text = fallback_reply(session["messages"])
+    except httpx.TimeoutException:
+        response_text = fallback_reply(session["messages"])
+        logger.warning("Ollama timeout for session %s", session_id)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Ollama error: {exc}") from exc
     session["messages"].append({"role": "assistant", "content": response_text})
+    session["pending_reply"] = False
+    session["last_assistant_at"] = stamp_now()
+    session["last_assistant_message"] = response_text
     user["credits"] = max(0, int(user.get("credits", 0)) - 1)
     save_simple_store(USERS_STORE_PATH, users_store)
+    persist_sessions()
     return SendMessageResponse(response=response_text, session_id=session_id)
 
 @app.post("/api/sessions/{session_id}/stream", dependencies=[Depends(verify_api_key)])
@@ -1574,6 +1616,16 @@ async def stream_message(session_id: str, payload: SendMessageRequest, user: Dic
         raise HTTPException(status_code=402, detail="Out of credits")
     session = get_session_or_404(session_id)
     return await stream_response(session, payload.message, bool(payload.fast), user=user)
+
+@app.get("/api/sessions/{session_id}/status", dependencies=[Depends(verify_api_key)])
+async def session_status(session_id: str, user: Dict[str, Any] = Depends(require_auth)):
+    session = get_session_or_404(session_id)
+    return {
+        "pending_reply": bool(session.get("pending_reply")),
+        "last_user_at": session.get("last_user_at"),
+        "last_assistant_at": session.get("last_assistant_at"),
+        "last_assistant_message": session.get("last_assistant_message"),
+    }
 
 @app.get("/api/sessions/{session_id}/stream", dependencies=[Depends(verify_api_key)])
 async def stream_message_get(

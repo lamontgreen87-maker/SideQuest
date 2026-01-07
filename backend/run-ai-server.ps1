@@ -1,6 +1,8 @@
 param(
     [string]$BindHost = "127.0.0.1",
-    [int]$Port = 8000
+    [int]$Port = 8000,
+    [string]$LogPath = (Join-Path $env:LOCALAPPDATA "SideQuest\run-ai-server.log"),
+    [switch]$Reload
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +16,21 @@ if (-not $env:PAYMENT_WALLET_ADDRESS) { $env:PAYMENT_WALLET_ADDRESS = "0x062F50d
 if (-not $env:PAYMENT_CONFIRMATIONS) { $env:PAYMENT_CONFIRMATIONS = "1" }
 if (-not $env:PAYMENT_MAX_BLOCK_RANGE) { $env:PAYMENT_MAX_BLOCK_RANGE = "100" }
 if (-not $env:STARTING_CREDITS) { $env:STARTING_CREDITS = "25" }
+
+$logDir = Split-Path -Path $LogPath -Parent
+if ($logDir -and -not (Test-Path $logDir)) {
+    New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+}
+if (-not (Test-Path $LogPath)) {
+    New-Item -Path $LogPath -ItemType File -Force | Out-Null
+}
+try {
+    Add-Content -Path $LogPath -Value ("[{0}] starting" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
+} catch {
+    $fallback = Join-Path $logDir ("run-ai-server-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
+    Add-Content -Path $fallback -Value ("[{0}] starting (fallback log)" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
+    $LogPath = $fallback
+}
 
 $cloudflaredConfigPath = Join-Path $env:USERPROFILE ".cloudflared\config.yml"
 $tunnelName = $env:CLOUDFLARE_TUNNEL_NAME
@@ -126,16 +143,37 @@ if ($cloudflaredPath) {
     }
 }
 
+function Test-TcpPort {
+    param(
+        [string]$TargetHost,
+        [int]$Port,
+        [int]$TimeoutMs = 1000
+    )
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $async = $client.BeginConnect($TargetHost, $Port, $null, $null)
+        $ok = $async.AsyncWaitHandle.WaitOne($TimeoutMs)
+        if (-not $ok) { return $false }
+        $client.EndConnect($async)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($client) { $client.Close() }
+    }
+}
+
 $ollamaHost = ([Uri]$env:OLLAMA_URL).Host
 $ollamaPort = ([Uri]$env:OLLAMA_URL).Port
-try {
-    $null = Test-NetConnection -ComputerName $ollamaHost -Port $ollamaPort -InformationLevel Quiet
-} catch {
-    $null = $null
+if (-not (Test-TcpPort -TargetHost $ollamaHost -Port $ollamaPort -TimeoutMs 1000)) {
+    $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
+    if ($ollamaCmd) {
+        Start-Process -FilePath $ollamaCmd.Source -ArgumentList "serve" -WindowStyle Hidden
+        Start-Sleep -Seconds 2
+    }
 }
-if (-not (Test-NetConnection -ComputerName $ollamaHost -Port $ollamaPort -InformationLevel Quiet)) {
-    Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
-    Start-Sleep -Seconds 2
+if (-not (Test-TcpPort -TargetHost $ollamaHost -Port $ollamaPort -TimeoutMs 1000)) {
+    Add-Content -Path $LogPath -Value ("[{0}] WARNING: Ollama not reachable at {1}:{2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $ollamaHost, $ollamaPort)
 }
 
 $venvActivate = Join-Path $PSScriptRoot "venv\Scripts\Activate.ps1"
@@ -143,5 +181,41 @@ if (Test-Path $venvActivate) {
     . $venvActivate
 }
 
-python -m uvicorn main:app --host $BindHost --port $Port --reload
+$env:PYTHONUNBUFFERED = "1"
+
+$uvicornArgs = @("main:app", "--host", $BindHost, "--port", $Port, "--log-level", "info")
+if ($Reload) {
+    $uvicornArgs += "--reload"
+}
+
+$pythonArgs = @("-u", "-m", "uvicorn") + $uvicornArgs
+$argString = ($pythonArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+
+$stdoutPath = $LogPath
+$stderrPath = ($LogPath + ".err")
+
+if (-not (Test-Path $stdoutPath)) { New-Item -Path $stdoutPath -ItemType File -Force | Out-Null }
+if (-not (Test-Path $stderrPath)) { New-Item -Path $stderrPath -ItemType File -Force | Out-Null }
+
+$pythonPath = "python"
+$venvPython = Join-Path $PSScriptRoot "venv\Scripts\python.exe"
+if (Test-Path $venvPython) {
+    $pythonPath = $venvPython
+} else {
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCmd) { $pythonPath = $pythonCmd.Source }
+}
+
+Add-Content -Path $stdoutPath -Value ("[{0}] logging to {1} and {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $stdoutPath, $stderrPath)
+Add-Content -Path $stdoutPath -Value ("[{0}] starting {1} {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $pythonPath, $argString)
+
+try {
+    $proc = Start-Process -FilePath $pythonPath -ArgumentList $argString -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+    if ($proc) {
+        Wait-Process -Id $proc.Id
+    }
+} catch {
+    Add-Content -Path $stderrPath -Value ("[{0}] Start-Process failed: {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $_.Exception.Message)
+    throw
+}
 

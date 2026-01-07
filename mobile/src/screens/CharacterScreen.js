@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import Button from "../components/Button";
 import Section from "../components/Section";
 import { apiGet, apiPost } from "../api/client";
@@ -95,32 +104,20 @@ const parseList = (value) =>
     .map((item) => item.trim())
     .filter(Boolean);
 
-const formatValue = (value) => {
-  if (value === undefined || value === null) return "-";
-  return String(value);
-};
-
 const formatModifier = (mod) => (mod >= 0 ? `+${mod}` : `${mod}`);
-
-function shuffle(list) {
-  const copy = [...list];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
 
 function abilityMod(score) {
   return Math.floor((score - 10) / 2);
 }
 
-export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
-  const [characters, setCharacters] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-  const [selectedType, setSelectedType] = useState("custom");
-  const [busy, setBusy] = useState(false);
+export default function CharacterScreen({
+  serverUrl,
+  onCharacterCreated,
+  scrollEnabled = true,
+}) {
   const [createBusy, setCreateBusy] = useState(false);
+  const [layoutHeight, setLayoutHeight] = useState(0);
+  const [contentHeight, setContentHeight] = useState(0);
 
   const [formName, setFormName] = useState("");
   const [formLevel, setFormLevel] = useState("1");
@@ -142,40 +139,6 @@ export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
   const [selectedWeapons, setSelectedWeapons] = useState([WEAPONS[0].id]);
   const [spellCatalog, setSpellCatalog] = useState([]);
 
-  const loadCharacters = useCallback(async () => {
-    try {
-      const [premades, custom] = await Promise.all([
-        apiGet(serverUrl, "/api/rules/premades"),
-        apiGet(serverUrl, "/api/characters"),
-      ]);
-      const premadeList = Object.entries(premades || {}).map(([id, payload]) => ({
-        id,
-        type: "premade",
-        name: payload.name,
-        klass: payload.class,
-        level: payload.level,
-      }));
-      const customList = Object.entries(custom || {}).map(([id, payload]) => ({
-        id,
-        type: "custom",
-        name: payload.name,
-        klass: payload.class,
-        level: payload.level,
-      }));
-      const all = [...customList, ...premadeList];
-      setCharacters(all);
-      if (!selectedId && all[0]) {
-        setSelectedId(all[0].id);
-        setSelectedType(all[0].type);
-      }
-    } catch (error) {
-      console.error("Failed to load characters", error);
-    }
-  }, [serverUrl, selectedId]);
-
-  useEffect(() => {
-    loadCharacters();
-  }, [loadCharacters]);
   const loadSpells = useCallback(async () => {
     try {
       const data = await apiGet(serverUrl, "/api/rules/spells");
@@ -224,13 +187,6 @@ export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
   useEffect(() => {
     setSelectedWeapons((prev) => prev.filter((id) => availableWeaponIds.includes(id)));
   }, [availableWeaponIds]);
-
-  const selected = useMemo(
-    () => characters.find((character) => character.id === selectedId),
-    [characters, selectedId]
-  );
-
-  const selectedStats = selected?.stats || {};
 
   const handleStatChange = useCallback((key, value) => {
     const filtered = value.replace(/[^0-9]/g, "");
@@ -391,7 +347,6 @@ export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
       setFormSaveProficiencies([]);
       setFormSkillProficiencies([]);
       setSelectedWeapons([WEAPONS[0].id]);
-      await loadCharacters();
       onCharacterCreated?.({
         name: resolvedName,
         klass: formClass,
@@ -423,71 +378,17 @@ export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
     selectedCantrips,
     selectedSpells,
     serverUrl,
-    loadCharacters,
     levelValue,
     onCharacterCreated,
   ]);
-  const createRandomCharacter = useCallback(async () => {
-    setBusy(true);
-    try {
-      const stats = shuffle([15, 14, 13, 12, 10, 8]);
-      const klass = CLASSES[Math.floor(Math.random() * CLASSES.length)];
-      const weapon = WEAPONS[Math.floor(Math.random() * WEAPONS.length)];
-      const payload = {
-        name: `Adventurer ${Math.floor(Math.random() * 999)}`,
-        klass,
-        level: 1,
-        stats: {
-          str: stats[0],
-          dex: stats[1],
-          con: stats[2],
-          int: stats[3],
-          wis: stats[4],
-          cha: stats[5],
-        },
-        armor_class: 10 + abilityMod(stats[1]),
-        max_hp: 8 + abilityMod(stats[2]),
-        weapons: [weapon],
-        items: [],
-      };
-      await apiPost(serverUrl, "/api/characters", payload);
-      await loadCharacters();
-    } catch (error) {
-      console.error("Failed to create character", error);
-    } finally {
-      setBusy(false);
-    }
-  }, [serverUrl, loadCharacters]);
 
-  return (
-    <ScrollView contentContainerStyle={styles.content} style={styles.scrollArea}>
-      <Section title="Characters">
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.row}>
-            {characters.map((character) => (
-              <Text
-                key={character.id}
-                style={[
-                  styles.pill,
-                  character.id === selectedId && styles.pillActive,
-                ]}
-                onPress={() => {
-                  setSelectedId(character.id);
-                  setSelectedType(character.type);
-                }}
-              >
-                {character.name}
-              </Text>
-            ))}
-          </View>
-        </ScrollView>
-        <Button
-          label={busy ? "..." : "Create Random"}
-          onPress={createRandomCharacter}
-          disabled={busy}
-        />
-      </Section>
-
+  const content = (
+    <>
+      {__DEV__ ? (
+        <Text style={styles.debugText}>
+          Scroll {Math.round(contentHeight)} / {Math.round(layoutHeight)}
+        </Text>
+      ) : null}
       <Section title="Create Character">
         <TextInput
           style={styles.formInput}
@@ -510,61 +411,72 @@ export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
               <Text style={styles.statValue}>+{proficiencyBonus}</Text>
             </View>
           </View>
-          <View style={styles.selectorRow}>
-            {CLASSES.map((klass) => (
-              <Pressable
-                key={klass}
-                onPress={() => setFormClass(klass)}
-                style={[
-                  styles.selector,
-                  formClass === klass && styles.selectorActive,
-                ]}
-              >
-                <Text style={styles.selectorText}>{klass}</Text>
-              </Pressable>
-            ))}
+          <View style={styles.selectorGroup}>
+            <View style={styles.selectorRow}>
+              {CLASSES.map((klass) => (
+                <Pressable
+                  key={klass}
+                  onPress={() => setFormClass(klass)}
+                  style={[
+                    styles.selector,
+                    formClass === klass && styles.selectorActive,
+                  ]}
+                >
+                  <Text style={styles.selectorText}>{klass}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
-          <View style={styles.selectorRow}>
-            {RACES.map((race) => (
-              <Pressable
-                key={race}
-                onPress={() => setFormRace(race)}
-                style={[
-                  styles.selector,
-                  formRace === race && styles.selectorActive,
-                ]}
-              >
-                <Text style={styles.selectorText}>{race}</Text>
-              </Pressable>
-            ))}
+          <View style={styles.selectorGroup}>
+            <View style={styles.selectorRow}>
+              {RACES.map((race) => (
+                <Pressable
+                  key={race}
+                  onPress={() => setFormRace(race)}
+                  style={[
+                    styles.selector,
+                    formRace === race && styles.selectorActive,
+                  ]}
+                >
+                  <Text style={styles.selectorText}>{race}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
-          <View style={styles.selectorRow}>
-            {BACKGROUNDS.map((background) => (
-              <Pressable
-                key={background}
-                onPress={() => setFormBackground(background)}
-                style={[
-                  styles.selector,
-                  formBackground === background && styles.selectorActive,
-                ]}
-              >
-                <Text style={styles.selectorText}>{background}</Text>
-              </Pressable>
-            ))}
+          <View style={styles.selectorGroup}>
+            <View style={styles.selectorRow}>
+              {BACKGROUNDS.map((background) => (
+                <Pressable
+                  key={background}
+                  onPress={() => setFormBackground(background)}
+                  style={[
+                    styles.selector,
+                    formBackground === background && styles.selectorActive,
+                  ]}
+                >
+                  <Text style={styles.selectorText}>{background}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
-          <View style={styles.selectorRow}>
-            {ALIGNMENTS.map((alignment) => (
-              <Pressable
-                key={alignment}
-                onPress={() => setFormAlignment(alignment)}
-                style={[
-                  styles.selector,
-                  formAlignment === alignment && styles.selectorActive,
-                ]}
-              >
-                <Text style={styles.selectorText}>{alignment}</Text>
-              </Pressable>
-            ))}
+          <View style={styles.selectorGroup}>
+            <View style={styles.alignmentGrid}>
+              {ALIGNMENTS.map((alignment) => (
+                <Pressable
+                  key={alignment}
+                  onPress={() => setFormAlignment(alignment)}
+                  style={[
+                    styles.selector,
+                    styles.alignmentButton,
+                    formAlignment === alignment && styles.selectorActive,
+                  ]}
+                >
+                  <Text style={[styles.selectorText, styles.alignmentText]}>
+                    {alignment}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
           <View style={styles.statGrid}>
             {Object.entries(formStats).map(([key, value]) => {
@@ -584,36 +496,34 @@ export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
             })}
           </View>
           <Text style={[styles.statLabelSmall, styles.sectionLabel]}>Weapons</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.weaponRow}>
-              {availableWeapons.map((weapon) => {
-                const isActive = selectedWeapons.includes(weapon.id);
-                const score = Number(formStats[weapon.attack_ability]) || 10;
-                return (
-                  <Pressable
-                    key={weapon.id}
-                    onPress={() => toggleWeapon(weapon.id)}
-                    style={[
-                      styles.weaponCard,
-                      isActive && styles.weaponCardActive,
-                    ]}
-                  >
-                    <Text style={styles.weaponName}>{weapon.name}</Text>
-                    <Text style={styles.weaponMeta}>
-                      {weapon.attack_ability.toUpperCase()} ·{" "}
-                      {weapon.damage_type}
-                    </Text>
-                    <Text style={styles.weaponMeta}>
-                      {weapon.damage.split("+")[0]}
-                      {abilityMod(score) >= 0
-                        ? `+${abilityMod(score)}`
-                        : abilityMod(score)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </ScrollView>
+          <View style={styles.weaponRow}>
+            {availableWeapons.map((weapon) => {
+              const isActive = selectedWeapons.includes(weapon.id);
+              const score = Number(formStats[weapon.attack_ability]) || 10;
+              return (
+                <Pressable
+                  key={weapon.id}
+                  onPress={() => toggleWeapon(weapon.id)}
+                  style={[
+                    styles.weaponCard,
+                    isActive && styles.weaponCardActive,
+                  ]}
+                >
+                  <Text style={styles.weaponName}>{weapon.name}</Text>
+                  <Text style={styles.weaponMeta}>
+                    {weapon.attack_ability.toUpperCase()} Aú{" "}
+                    {weapon.damage_type}
+                  </Text>
+                  <Text style={styles.weaponMeta}>
+                    {weapon.damage.split("+")[0]}
+                    {abilityMod(score) >= 0
+                      ? `+${abilityMod(score)}`
+                      : abilityMod(score)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
           <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
             Save Proficiencies
           </Text>
@@ -755,86 +665,55 @@ export default function CharacterScreen({ serverUrl, onCharacterCreated }) {
           />
       </Section>
 
-      <Section title="Sheet">
-        {selected ? (
-          <View style={styles.card}>
-            <Text style={styles.name}>{selected.name}</Text>
-            <Text style={styles.meta}>
-              {selected.klass} | Level {selected.level} | {selectedType}
-            </Text>
-            <View style={styles.sheetMetaRow}>
-              <View style={styles.sheetMetaCard}>
-                <Text style={styles.sheetMetaLabel}>Armor Class</Text>
-                <Text style={styles.sheetMetaValue}>{formatValue(selected.armor_class)}</Text>
-              </View>
-              <View style={styles.sheetMetaCard}>
-                <Text style={styles.sheetMetaLabel}>Hit Points</Text>
-                <Text style={styles.sheetMetaValue}>{formatValue(selected.max_hp)}</Text>
-              </View>
-              <View style={styles.sheetMetaCard}>
-                <Text style={styles.sheetMetaLabel}>Proficiency</Text>
-                <Text style={styles.sheetMetaValue}>
-                  +{selected.level ? 2 + Math.floor((Number(selected.level) - 1) / 4) : 2}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.sheetStats}>
-              {Object.entries(selectedStats).map(([key, value]) => {
-                const numeric = Number(value) || 0;
-                return (
-                  <View key={key} style={styles.sheetStatBlock}>
-                    <Text style={styles.sheetStatLabel}>{key.toUpperCase()}</Text>
-                    <Text style={styles.sheetStatValue}>{formatValue(value)}</Text>
-                    <Text style={styles.sheetStatMod}>
-                      {formatModifier(abilityMod(numeric))}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-            {selected.weapons?.length ? (
-              <View style={styles.sheetSection}>
-                <Text style={styles.sheetSectionTitle}>Weapons</Text>
-                <View style={styles.sheetList}>
-                  {selected.weapons.map((weapon, index) => (
-                    <Text
-                      key={weapon.name + "-" + index}
-                      style={styles.sheetListItem}
-                    >
-                      {weapon.name} ({weapon.damage || "-"}) - {weapon.damage_type || "-"} -
-                      {weapon.attack_ability?.toUpperCase() || "-"}
-                    </Text>
-                  ))}
-                </View>
-              </View>
-            ) : null}
-            {Array.isArray(selected.known_spells) && selected.known_spells.length ? (
-              <View style={styles.sheetSection}>
-                <Text style={styles.sheetSectionTitle}>Known Spells</Text>
-                <Text style={styles.sheetListItem}>{selected.known_spells.join(", ")}</Text>
-              </View>
-            ) : null}
-          </View>
-        ) : (
-          <Text style={styles.muted}>No character selected.</Text>
-        )}
-      </Section>
-    </ScrollView>
+    </>
+  );
+
+  if (!scrollEnabled) {
+    return <View style={styles.content}>{content}</View>;
+  }
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <ScrollView
+        contentContainerStyle={[styles.content, styles.scrollContent]}
+        style={styles.scrollArea}
+        scrollEnabled
+        nestedScrollEnabled
+        showsVerticalScrollIndicator
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onLayout={(event) => setLayoutHeight(event.nativeEvent.layout.height)}
+        onContentSizeChange={(_, height) => setContentHeight(height)}
+      >
+        {content}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    minHeight: 0,
+  },
   content: {
     gap: spacing.lg,
     paddingHorizontal: 0,
+    paddingBottom: spacing.xl,
     width: "100%",
     alignItems: "stretch",
+  },
+  scrollContent: {
+    flexGrow: 1,
   },
   scrollArea: {
     width: "100%",
     flex: 1,
-    flexGrow: 1,
     alignSelf: "stretch",
+    minHeight: 0,
   },
   formInput: {
     borderWidth: 1,
@@ -868,12 +747,33 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     alignContent: "flex-start",
   },
+  selectorGroup: {
+    marginBottom: spacing.md,
+  },
   selector: {
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.pill,
     paddingVertical: spacing.xs,
     paddingHorizontal: spacing.sm,
+  },
+  alignmentGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    gap: spacing.xs,
+  },
+  alignmentButton: {
+    width: "30.5%",
+    aspectRatio: 1,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xs,
+  },
+  alignmentText: {
+    textAlign: "center",
+    fontSize: 10,
   },
   selectorActive: {
     backgroundColor: colors.gold,
@@ -957,6 +857,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+  debugText: {
+    color: colors.mutedGold,
+    fontSize: 10,
+    marginBottom: spacing.sm,
+  },
   proficiencyCard: {
     flex: 1,
     borderWidth: 1,
@@ -977,88 +882,14 @@ const styles = StyleSheet.create({
     color: colors.mutedGold,
     letterSpacing: 1,
     textTransform: "uppercase",
-  },
-  sheetMetaRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  sheetMetaCard: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    backgroundColor: colors.panelAlt,
-    alignItems: "center",
-  },
-  sheetMetaLabel: {
-    color: colors.mutedGold,
-    fontSize: 10,
-    letterSpacing: 1,
-    textTransform: "uppercase",
-  },
-  sheetMetaValue: {
-    color: colors.parchment,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  sheetStats: {
+  },  weaponRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  sheetStatBlock: {
-    width: "30%",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    alignItems: "center",
-    backgroundColor: colors.panel,
-  },
-  sheetStatLabel: {
-    color: colors.mutedGold,
-    fontSize: 10,
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    marginBottom: spacing.xs,
-  },
-  sheetStatValue: {
-    color: colors.parchment,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  sheetStatMod: {
-    color: colors.gold,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  sheetSection: {
-    marginTop: spacing.sm,
-    gap: spacing.xs,
-  },
-  sheetSectionTitle: {
-    color: colors.mutedGold,
-    fontSize: 12,
-    letterSpacing: 1,
-    textTransform: "uppercase",
-  },
-  sheetList: {
-    marginTop: spacing.xs,
-  },
-  sheetListItem: {
-    color: colors.parchment,
-    fontSize: 12,
-    lineHeight: 18,
-    marginBottom: spacing.xs,
-  },
-  weaponRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
+    justifyContent: "space-between",
   },
   weaponCard: {
+    flexBasis: "48%",
     minWidth: 140,
     borderWidth: 1,
     borderColor: colors.border,
@@ -1080,50 +911,9 @@ const styles = StyleSheet.create({
     color: colors.mutedGold,
     fontSize: 10,
   },
-  row: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    flexWrap: "wrap",
-    marginBottom: spacing.sm,
-  },
-  pill: {
-    color: colors.mutedGold,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    fontSize: 12,
-    letterSpacing: 1,
-    textTransform: "uppercase",
-  },
-  pillActive: {
-    backgroundColor: colors.gold,
-    color: colors.ink,
-    borderColor: colors.gold,
-  },
-  card: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.panel,
-    padding: spacing.md,
-  },
-  name: {
-    color: colors.parchment,
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: spacing.xs,
-  },
-  meta: {
-    color: colors.mutedGold,
-    fontSize: 12,
-  },
-  muted: {
-    color: colors.mutedGold,
-    fontSize: 12,
-  },
 });
+
+
 
 
 
