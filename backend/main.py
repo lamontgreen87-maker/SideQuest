@@ -50,6 +50,8 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL_NAME = os.getenv("MODEL_NAME", "qwen3:4b")
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "240"))
 FALLBACK_MODEL_NAME = os.getenv("MODEL_FALLBACK", "qwen3:8b")
+HEAVY_MODEL_NAME = os.getenv("MODEL_HEAVY", "qwen3:8b")
+HEAVY_FALLBACK_MODEL = os.getenv("MODEL_HEAVY_FALLBACK", MODEL_NAME)
 CLERK_MODEL_NAME = os.getenv("MODEL_CLERK", "qwen2.5:1.5b")
 CLERK_FALLBACK_MODEL = os.getenv("MODEL_CLERK_FALLBACK", MODEL_NAME)
 CLERK_LOG_PATH = os.getenv(
@@ -1091,6 +1093,84 @@ def get_monster_catalog() -> Dict[str, Monster]:
         catalog[key] = monster_from_payload(payload)
     return catalog
 
+def parse_challenge_rating(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if "/" in text:
+        parts = text.split("/")
+        if len(parts) == 2:
+            try:
+                return float(parts[0]) / float(parts[1])
+            except ValueError:
+                return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+def select_encounter_monster(level: int) -> Optional[Dict[str, Any]]:
+    catalog = get_monster_catalog()
+    entries: List[Tuple[str, Monster, Optional[float]]] = []
+    for key, monster in catalog.items():
+        cr_value = parse_challenge_rating(getattr(monster, "cr", None))
+        entries.append((key, monster, cr_value))
+    if not entries:
+        return None
+    min_cr = max(0.25, level - 1)
+    max_cr = max(min_cr, level + 1)
+    eligible = [entry for entry in entries if entry[2] is not None and min_cr <= entry[2] <= max_cr]
+    if not eligible:
+        eligible = entries
+    key, monster, cr_value = random.choice(eligible)
+    return {
+        "id": key,
+        "name": monster.name,
+        "cr": cr_value,
+        "type": monster.type,
+    }
+
+def schedule_next_encounter(world_state: Dict[str, Any], level: int) -> Dict[str, Any]:
+    updated = dict(world_state)
+    now = time.time()
+    interval_minutes = random.randint(10, 14)
+    updated["next_encounter_at"] = now + (interval_minutes * 60)
+    updated["next_encounter"] = select_encounter_monster(level)
+    updated["updated_at"] = stamp_now()
+    return updated
+
+def maybe_trigger_encounter(
+    state: Dict[str, Any], world_state: Dict[str, Any]
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    updated = dict(world_state)
+    if state.get("in_combat"):
+        return updated, None
+    now = time.time()
+    next_at = updated.get("next_encounter_at")
+    if not isinstance(next_at, (int, float)):
+        next_at = None
+    character = state.get("character") if isinstance(state.get("character"), dict) else {}
+    try:
+        level = int(character.get("level") or 1)
+    except (TypeError, ValueError):
+        level = 1
+    if next_at is None or updated.get("next_encounter") is None:
+        updated = schedule_next_encounter(updated, level)
+        next_at = updated.get("next_encounter_at")
+    if next_at is None or now < float(next_at):
+        return updated, None
+    encounter = updated.get("next_encounter")
+    if not isinstance(encounter, dict):
+        encounter = select_encounter_monster(level)
+    updated["last_encounter_at"] = now
+    updated = schedule_next_encounter(updated, level)
+    updated["updated_at"] = stamp_now()
+    return updated, encounter
+
 def get_character_catalog() -> Dict[str, Character]:
     catalog: Dict[str, Character] = {}
     for key, pc in PREMADE_SHEETS.items():
@@ -1136,6 +1216,7 @@ def default_game_state() -> Dict[str, Any]:
         "in_combat": False,
         "inventory": [],
         "loot_pending": [],
+        "pending_encounter": None,
         "updated_at": stamp_now(),
     }
 
@@ -1145,6 +1226,9 @@ def default_world_state() -> Dict[str, Any]:
         "facts": [],
         "campaign": {},
         "campaign_world": "",
+        "next_encounter_at": None,
+        "next_encounter": None,
+        "last_encounter_at": None,
         "updated_at": stamp_now(),
     }
 
@@ -1161,6 +1245,12 @@ def ensure_world_state(session_id: str) -> Dict[str, Any]:
         existing["campaign"] = {}
     if "campaign_world" not in existing:
         existing["campaign_world"] = ""
+    if "next_encounter_at" not in existing:
+        existing["next_encounter_at"] = None
+    if "next_encounter" not in existing:
+        existing["next_encounter"] = None
+    if "last_encounter_at" not in existing:
+        existing["last_encounter_at"] = None
     return existing
 
 def apply_world_updates(world_state: Dict[str, Any], updates: List[str]) -> Dict[str, Any]:
@@ -1187,6 +1277,8 @@ def ensure_session_state(session: Dict[str, Any]) -> None:
         session["game_state"]["inventory"] = []
     if "loot_pending" not in session["game_state"]:
         session["game_state"]["loot_pending"] = []
+    if "pending_encounter" not in session["game_state"]:
+        session["game_state"]["pending_encounter"] = None
 
 def apply_character_to_state(
     state: Dict[str, Any], name: Optional[str], klass: Optional[str], character: Optional[Dict[str, Any]]
@@ -1552,7 +1644,10 @@ def build_clerk_messages(
                 "world_updates should list new persistent facts (short sentences) to store. "
                 "world_summary should be a concise 1-3 sentence rolling summary of the story so far. "
                 "inventory_add should list newly discovered loot items to add to inventory. "
-                "inventory_remove should list items that are consumed or removed."
+                "inventory_remove should list items that are consumed or removed. "
+                "Make leveling part of your GM goals: aim for progression from level 1 to level 5 "
+                "in about 2 hours of play (roughly ~5 encounters). When a milestone is reached, "
+                "update state.character.level and add a world_update like 'Level up: <name> is now level X.'"
             ),
         },
         {
@@ -1621,6 +1716,7 @@ async def clerk_update_state(
         inventory = [item for item in inventory if item not in set(inventory_remove)]
     next_state["inventory"] = inventory
     next_state["loot_pending"] = inventory_add
+    updated_world, encounter = maybe_trigger_encounter(next_state, world_state)
     result = {
         "should_narrate": bool(payload.get("should_narrate", True)),
         "state": next_state,
@@ -1629,9 +1725,21 @@ async def clerk_update_state(
         "world_updates": [str(item).strip() for item in world_updates if str(item).strip()],
         "world_summary": world_summary,
         "action_type": action_type,
+        "world_state": updated_world,
     }
     if result["action_type"] != "equip":
         result["should_narrate"] = True
+    if encounter:
+        encounter_name = encounter.get("name") or "a threat"
+        cr_value = encounter.get("cr")
+        encounter_line = f"An encounter begins: {encounter_name} appears."
+        if cr_value is not None:
+            encounter_line = f"An encounter begins: {encounter_name} (CR {cr_value}) appears."
+        story_input = f"{result['story_input']} {encounter_line}"
+        result["story_input"] = story_input.strip()
+        result["should_narrate"] = True
+        result["action_type"] = "narrate"
+        next_state["pending_encounter"] = encounter
     summary = str(result["state"].get("summary", "")).strip()
     summary = summary[:160] + ("..." if len(summary) > 160 else "")
     cleaned_input = str(result["story_input"]).strip()
@@ -1782,8 +1890,8 @@ async def _build_campaign_world(state: Dict[str, Any]) -> str:
                     ollama_chat_with_model(
                         messages,
                         fast=True,
-                        model_name=MODEL_NAME,
-                        fallback_model=FALLBACK_MODEL_NAME,
+                        model_name=HEAVY_MODEL_NAME,
+                        fallback_model=HEAVY_FALLBACK_MODEL,
                     ),
                     timeout=25,
                 )
@@ -1833,8 +1941,8 @@ async def _build_campaign_brief_from_world(
             await ollama_chat_with_model(
                 messages,
                 fast=True,
-                model_name=MODEL_NAME,
-                fallback_model=FALLBACK_MODEL_NAME,
+                model_name=HEAVY_MODEL_NAME,
+                fallback_model=HEAVY_FALLBACK_MODEL,
             )
         ).strip()
     )
@@ -1844,8 +1952,8 @@ async def _build_campaign_brief_from_world(
                 await ollama_chat_with_model(
                     build_retry_messages(messages),
                     fast=True,
-                    model_name=MODEL_NAME,
-                    fallback_model=FALLBACK_MODEL_NAME,
+                    model_name=HEAVY_MODEL_NAME,
+                    fallback_model=HEAVY_FALLBACK_MODEL,
                 )
             ).strip()
         )
@@ -2072,6 +2180,18 @@ INTRO_FALLBACKS = load_intro_fallbacks()
 
 def pick_intro_fallback() -> str:
     return random.choice(INTRO_FALLBACKS or INTRO_FALLBACKS_DEFAULT)
+
+def should_use_heavy_model(
+    state: Dict[str, Any], world_updates: List[str], story_input: str
+) -> bool:
+    if state.get("pending_encounter"):
+        return True
+    for entry in world_updates:
+        if "level up" in str(entry).lower():
+            return True
+    if "an encounter begins" in str(story_input).lower():
+        return True
+    return False
 
 def count_words(text: str) -> int:
     return len([part for part in text.strip().split() if part])
@@ -2623,6 +2743,7 @@ async def send_message(
     try:
         clerk_result = await clerk_update_state(session["game_state"], world_state, payload.message)
         session["game_state"] = clerk_result["state"]
+        world_state = clerk_result.get("world_state") or world_state
         world_state = apply_world_updates(world_state, clerk_result.get("world_updates") or [])
         world_summary = str(clerk_result.get("world_summary") or "").strip()
         if world_summary:
@@ -2649,6 +2770,13 @@ async def send_message(
         if not should_narrate:
             response_text = clerk_result.get("player_reply") or "Noted."
         else:
+            use_heavy = should_use_heavy_model(
+                session["game_state"],
+                clerk_result.get("world_updates") or [],
+                story_input,
+            )
+            model_name = HEAVY_MODEL_NAME if use_heavy else MODEL_NAME
+            fallback_model = HEAVY_FALLBACK_MODEL if use_heavy else FALLBACK_MODEL_NAME
             history = [msg for msg in session["messages"] if msg.get("role") != "system"]
             tail = get_last_turn_messages(history)
             model_messages = [
@@ -2663,8 +2791,8 @@ async def send_message(
                 model_messages,
                 fast,
                 28,
-                model_name=CLERK_MODEL_NAME,
-                fallback_model=CLERK_FALLBACK_MODEL,
+                model_name=model_name,
+                fallback_model=fallback_model,
             )
             last_assistant = get_last_assistant_message(session["messages"])
             if last_assistant and response_text.strip() == last_assistant.strip():
@@ -2673,8 +2801,8 @@ async def send_message(
                     retry_context,
                     fast,
                     28,
-                    model_name=CLERK_MODEL_NAME,
-                    fallback_model=CLERK_FALLBACK_MODEL,
+                    model_name=model_name,
+                    fallback_model=fallback_model,
                 )
                 if response_text.strip() == last_assistant.strip():
                     response_text = fallback_reply(model_messages)
@@ -2683,8 +2811,8 @@ async def send_message(
                     build_continue_messages(model_messages),
                     fast,
                     14,
-                    model_name=CLERK_MODEL_NAME,
-                    fallback_model=CLERK_FALLBACK_MODEL,
+                    model_name=model_name,
+                    fallback_model=fallback_model,
                 )
                 if continuation:
                     response_parts = [response_text, continuation]
@@ -2742,6 +2870,8 @@ async def send_message(
             response_parts = [response_text, follow_up]
     if should_narrate and session["game_state"].get("loot_pending"):
         session["game_state"]["loot_pending"] = []
+    if should_narrate and session["game_state"].get("pending_encounter"):
+        session["game_state"]["pending_encounter"] = None
     session["pending_reply"] = False
     session["last_assistant_at"] = stamp_now()
     user["credits"] = max(0, int(user.get("credits", 0)) - 1)
@@ -2781,12 +2911,19 @@ async def continue_message(
             *tail,
         ]
         continue_messages = build_continue_messages(build_avoid_repeat_messages(model_messages))
+        use_heavy = should_use_heavy_model(
+            session["game_state"],
+            [],
+            "",
+        )
+        model_name = HEAVY_MODEL_NAME if use_heavy else MODEL_NAME
+        fallback_model = HEAVY_FALLBACK_MODEL if use_heavy else FALLBACK_MODEL_NAME
         response_text = await generate_min_response(
             continue_messages,
             fast,
             28,
-            model_name=CLERK_MODEL_NAME,
-            fallback_model=CLERK_FALLBACK_MODEL,
+            model_name=model_name,
+            fallback_model=fallback_model,
         )
         last_assistant = get_last_assistant_message(session["messages"])
         if last_assistant and response_text.strip() == last_assistant.strip():
@@ -2795,8 +2932,8 @@ async def continue_message(
                 build_continue_messages(retry_context),
                 fast,
                 28,
-                model_name=CLERK_MODEL_NAME,
-                fallback_model=CLERK_FALLBACK_MODEL,
+                model_name=model_name,
+                fallback_model=fallback_model,
             )
             if response_text.strip() == last_assistant.strip():
                 response_text = fallback_reply(model_messages)
@@ -2805,8 +2942,8 @@ async def continue_message(
                 build_continue_messages(model_messages),
                 fast,
                 14,
-                model_name=CLERK_MODEL_NAME,
-                fallback_model=CLERK_FALLBACK_MODEL,
+                model_name=model_name,
+                fallback_model=fallback_model,
             )
             if continuation:
                 response_text = (response_text + " " + continuation).strip()
