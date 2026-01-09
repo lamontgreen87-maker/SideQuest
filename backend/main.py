@@ -69,7 +69,7 @@ PAYMENT_POLL_INTERVAL = float(os.getenv("PAYMENT_POLL_INTERVAL", "15"))
 PAYMENT_MAX_BLOCK_RANGE = int(os.getenv("PAYMENT_MAX_BLOCK_RANGE", "100"))
 PRICE_TABLE_JSON = os.getenv("PRICE_TABLE_JSON", "")
 PRICE_PER_CREDIT_USDT = os.getenv("PRICE_PER_CREDIT_USDT", "0.02")
-STARTING_CREDITS = int(os.getenv("STARTING_CREDITS", "50"))
+STARTING_CREDITS = max(50, int(os.getenv("STARTING_CREDITS", "50")))
 
 SKILL_TO_ABILITY = {
     "athletics": "str",
@@ -164,6 +164,9 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         + "Always end the player-visible narration with a direct question. "
         + "End with a separate line: 'NARRATION_HINT: narrate' or "
         + "'NARRATION_HINT: skip' to signal whether the next action deserves narration.\n"
+        + "Maintain continuity with the recent conversation. "
+        + "Avoid modern or out-of-genre references (chainsaws, phones, cars, guns, electricity, internet) "
+        + "unless explicitly present in the world state.\n"
         + combat_line
         + loot_line
         + ("Campaign brief:\n" + campaign_summary + "\n" if campaign_summary else "")
@@ -229,6 +232,7 @@ class SendMessageResponse(BaseModel):
     session_id: str
     response_parts: Optional[List[str]] = None
     game_state: Optional[Dict[str, Any]] = None
+    encounter: Optional[Dict[str, Any]] = None
 
 class RulesSessionRequest(BaseModel):
     pc_id: str
@@ -799,6 +803,9 @@ def get_or_create_user(email: str) -> Dict[str, Any]:
 def get_or_create_user_wallet(address: str) -> Dict[str, Any]:
     for payload in users_store.values():
         if payload.get("wallet") == address:
+            if payload.get("credits") is None:
+                payload["credits"] = STARTING_CREDITS
+                save_simple_store(USERS_STORE_PATH, users_store)
             return payload
     user_id = str(uuid.uuid4())
     users_store[user_id] = {
@@ -1502,22 +1509,15 @@ def get_last_assistant_message(messages: List[Dict[str, str]]) -> str:
     return ""
 
 
-def get_last_turn_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    last_user_index = None
-    last_assistant_index = None
-    for index in range(len(messages) - 1, -1, -1):
-        role = messages[index].get("role")
-        if last_user_index is None and role == "user":
-            last_user_index = index
-        if last_assistant_index is None and role == "assistant":
-            last_assistant_index = index
-        if last_user_index is not None and last_assistant_index is not None:
-            break
-    indices = [idx for idx in (last_user_index, last_assistant_index) if idx is not None]
-    if not indices:
+def get_last_turn_messages(
+    messages: List[Dict[str, str]], limit: int = 6
+) -> List[Dict[str, str]]:
+    if limit <= 0:
         return []
-    indices.sort()
-    return [messages[idx] for idx in indices]
+    filtered = [msg for msg in messages if msg.get("role") in ("user", "assistant")]
+    if not filtered:
+        return []
+    return filtered[-limit:]
 
 def last_assistant_asked_question(messages: List[Dict[str, str]]) -> bool:
     last = get_last_assistant_message(messages)
@@ -2549,6 +2549,7 @@ async def get_me(user: Dict[str, Any] = Depends(require_auth)):
         "email": user.get("email"),
         "wallet": user.get("wallet"),
         "credits": int(user.get("credits", 0)),
+        "guest": bool(user.get("guest")),
     }
 
 @app.post("/api/redeem", response_model=RedeemResponse)
@@ -2870,18 +2871,20 @@ async def send_message(
             response_parts = [response_text, follow_up]
     if should_narrate and session["game_state"].get("loot_pending"):
         session["game_state"]["loot_pending"] = []
-    if should_narrate and session["game_state"].get("pending_encounter"):
-        session["game_state"]["pending_encounter"] = None
+    encounter_payload = session.get("game_state", {}).get("pending_encounter")
     session["pending_reply"] = False
     session["last_assistant_at"] = stamp_now()
     user["credits"] = max(0, int(user.get("credits", 0)) - 1)
     save_simple_store(USERS_STORE_PATH, users_store)
     persist_sessions()
+    if should_narrate and session["game_state"].get("pending_encounter"):
+        session["game_state"]["pending_encounter"] = None
     return SendMessageResponse(
         response=response_text,
         session_id=session_id,
         response_parts=response_parts,
         game_state=session.get("game_state"),
+        encounter=encounter_payload,
     )
 
 

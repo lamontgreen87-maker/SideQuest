@@ -14,6 +14,7 @@ export default function SettingsScreen({
   presets,
   updateStatus,
   onSignOut,
+  accountLabel,
   credits,
 }) {
   return (
@@ -31,12 +32,6 @@ export default function SettingsScreen({
         </View>
         <View style={styles.row}>
           <Button
-            label="Use Local"
-            onPress={() => onSelectServerUrl(presets?.local)}
-            disabled={!presets?.local}
-            variant="ghost"
-          />
-          <Button
             label="Use Production"
             onPress={() => onSelectServerUrl(presets?.prod)}
             disabled={!presets?.prod}
@@ -46,6 +41,9 @@ export default function SettingsScreen({
       </Section>
 
       <Section title="Account">
+        <Text style={styles.statusMuted}>
+          Account: {accountLabel || "Signed out"}
+        </Text>
         <Text style={styles.statusMuted}>Credits: {credits}</Text>
         <Button label="Sign Out" onPress={onSignOut} variant="danger" />
       </Section>

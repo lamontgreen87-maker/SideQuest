@@ -182,6 +182,7 @@ export default function StoryScreen({
   const [pcCatalog, setPcCatalog] = useState({});
   const [pcId, setPcId] = useState(null);
   const [enemyId, setEnemyId] = useState(null);
+  const [enemyCatalog, setEnemyCatalog] = useState({});
   const [rulesSessionId, setRulesSessionId] = useState(null);
   const [weaponId, setWeaponId] = useState(null);
   const [weaponOptions, setWeaponOptions] = useState([]);
@@ -236,6 +237,28 @@ export default function StoryScreen({
   const combinedSpellOptions = useMemo(
     () => (spellOptions.length ? spellOptions : spellMenuOptions),
     [spellOptions, spellMenuOptions]
+  );
+  const resolveEncounterEnemyId = useCallback(
+    (encounter) => {
+      if (!encounter) return null;
+      if (typeof encounter === "string") {
+        const name = encounter.trim().toLowerCase();
+        const match = Object.entries(enemyCatalog).find(
+          ([, payload]) => String(payload?.name || "").trim().toLowerCase() === name
+        );
+        return match ? match[0] : null;
+      }
+      if (encounter.id) return encounter.id;
+      const rawName =
+        encounter.name || encounter.monster || encounter.enemy || "";
+      const cleanedName = String(rawName).trim().toLowerCase();
+      if (!cleanedName) return null;
+      const match = Object.entries(enemyCatalog).find(
+        ([, payload]) => String(payload?.name || "").trim().toLowerCase() === cleanedName
+      );
+      return match ? match[0] : null;
+    },
+    [enemyCatalog]
   );
   const buildSessionTitle = useCallback((list) => {
     const firstAssistant = list.find((msg) => msg.role === "assistant");
@@ -305,6 +328,12 @@ export default function StoryScreen({
   const appendAssistantResponse = useCallback(
     (response) => {
       if (!response) return;
+      const encounter = response?.encounter;
+      const triggerEncounter = () => {
+        if (encounter) {
+          handleEncounterStart(encounter);
+        }
+      };
       const nextInventory = response?.game_state?.inventory;
       if (Array.isArray(nextInventory)) {
         setInventoryItems(nextInventory);
@@ -319,6 +348,7 @@ export default function StoryScreen({
             return [...prev, makeMessage("assistant", cleaned)];
           });
         });
+        triggerEncounter();
         return;
       }
       const aiContent = stripThinking(
@@ -335,8 +365,9 @@ export default function StoryScreen({
           return [...prev, makeMessage("assistant", aiContent)];
         });
       }
+      triggerEncounter();
     },
-    [makeMessage]
+    [makeMessage, handleEncounterStart]
   );
 
   const ensureSession = useCallback(async () => {
@@ -565,6 +596,7 @@ export default function StoryScreen({
       }));
       setPcs(pcList);
       setPcCatalog(premadeSource || {});
+      setEnemyCatalog(bestiarySource || {});
       if (!pcId && pcList[0]) setPcId(pcList[0].id);
       if (!enemyId && enemyList[0]) setEnemyId(enemyList[0].id);
     } catch (error) {
@@ -584,17 +616,21 @@ export default function StoryScreen({
   }, [currentCharacter]);
 
   const createRulesSession = useCallback(
-    async (announce = false) => {
-      if (!pcId || !enemyId) {
+    async (announce = false, overrideEnemyId = null) => {
+      const activeEnemyId = overrideEnemyId || enemyId;
+      if (!pcId || !activeEnemyId) {
         throw new Error("Select a combatant first.");
       }
       const storySessionId = await ensureSession();
       const response = await apiPost(serverUrl, "/api/rules/sessions", {
         pc_id: pcId,
-        enemy_id: enemyId,
+        enemy_id: activeEnemyId,
         story_session_id: storySessionId,
       });
       setRulesSessionId(response.session_id);
+      if (overrideEnemyId) {
+        setEnemyId(activeEnemyId);
+      }
       const weaponEntries = response?.pc?.weapons || {};
       const weaponKeys = Object.keys(weaponEntries);
       setWeaponOptions(
@@ -619,11 +655,30 @@ export default function StoryScreen({
   );
 
   const ensureRulesSession = useCallback(
-    async (announce = false) => {
+    async (announce = false, overrideEnemyId = null) => {
       if (rulesSessionId) return rulesSessionId;
-      return createRulesSession(announce);
+      return createRulesSession(announce, overrideEnemyId);
     },
     [rulesSessionId, createRulesSession]
+  );
+
+  const handleEncounterStart = useCallback(
+    async (encounter) => {
+      if (!encounter) return;
+      if (rulesSessionId) {
+        setDrawerExpanded(true);
+        return;
+      }
+      const resolvedEnemyId = resolveEncounterEnemyId(encounter);
+      try {
+        await createRulesSession(true, resolvedEnemyId);
+        setDrawerExpanded(true);
+        setPlayerTurn(true);
+      } catch (error) {
+        console.error("Failed to start encounter", error);
+      }
+    },
+    [rulesSessionId, resolveEncounterEnemyId, createRulesSession]
   );
 
   const startCombat = useCallback(async () => {

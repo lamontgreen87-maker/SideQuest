@@ -17,9 +17,11 @@ export default function AuthScreen({
   onOpenWallet,
   authStatus,
   onSignIn,
+  onGuestSignIn,
   onDisconnect,
   updateStatus,
   onResetWallet,
+  accountLabel,
 }) {
   const isBusy = authStatus?.loading;
   const connectedAddress = walletStatus?.address || walletAddress;
@@ -72,11 +74,20 @@ export default function AuthScreen({
           <Text style={styles.statusMuted}>
             {connectedAddress ? `Wallet: ${connectedAddress}` : "No wallet connected"}
           </Text>
+          <Text style={styles.statusMuted}>
+            Account: {accountLabel || "Guest"}
+          </Text>
           <View style={styles.row}>
             <Button
               label={isBusy ? "Signing In..." : "Sign In"}
               onPress={onSignIn}
               disabled={!connectedAddress || isBusy}
+            />
+            <Button
+              label={isBusy ? "Signing In..." : "Sign In as Guest"}
+              onPress={onGuestSignIn}
+              variant="ghost"
+              disabled={isBusy}
             />
           </View>
           {authStatus?.error ? (

@@ -30,7 +30,6 @@ import {
   GIST_CONFIG_URL,
   GITHUB_RELEASES_URL,
   GITHUB_RELEASES_PAGE,
-  LOCAL_SERVER_URL,
   PROD_SERVER_URL,
   STORAGE_KEYS,
   WALLETCONNECT_METADATA,
@@ -59,6 +58,28 @@ function compareVersions(a, b) {
     if (diff !== 0) return diff;
   }
   return 0;
+}
+
+function isLocalUrl(value) {
+  if (!value) return false;
+  try {
+    const parsed = new URL(String(value));
+    const host = parsed.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return true;
+    }
+    if (
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    ) {
+      return true;
+    }
+    if (host.endsWith(".local")) return true;
+    return false;
+  } catch (error) {
+    return false;
+  }
 }
 
 function withTimeout(promise, ms, label) {
@@ -91,6 +112,7 @@ export default function App() {
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [token, setToken] = useState(null);
   const [wallet, setWallet] = useState(null);
+  const [accountLabel, setAccountLabel] = useState(null);
   const [credits, setCredits] = useState(0);
   const [activeTab, setActiveTab] = useState("story");
   const [creationVisible, setCreationVisible] = useState(false);
@@ -142,6 +164,10 @@ export default function App() {
 
   const loadStoredState = useCallback(async () => {
     let initialServerUrl = await getItem(STORAGE_KEYS.serverUrl, DEFAULT_SERVER_URL);
+    if (isLocalUrl(initialServerUrl)) {
+      initialServerUrl = PROD_SERVER_URL;
+      await setItem(STORAGE_KEYS.serverUrl, initialServerUrl);
+    }
     setServerUrl(initialServerUrl);
     const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
     if (storedCharacter) {
@@ -192,12 +218,17 @@ export default function App() {
       try {
         const me = await apiGet(initialServerUrl, "/api/me");
         setCredits(me.credits || 0);
+        const isGuest = Boolean(me?.guest) || !me?.wallet;
+        setAccountLabel(isGuest ? "Guest" : "Wallet");
       } catch (error) {
         await removeItem(STORAGE_KEYS.authToken);
         await removeItem(STORAGE_KEYS.authWallet);
         setToken(null);
         setWallet(null);
+        setAccountLabel(null);
       }
+    } else {
+      setAccountLabel(null);
     }
   }, [checkHealth]);
 
@@ -281,12 +312,31 @@ export default function App() {
   }, []);
 
   const saveServerUrl = useCallback(async () => {
+    if (isLocalUrl(serverUrl)) {
+      setWalletStatus((prev) => ({
+        ...prev,
+        healthError: "Local servers are disabled. Use the online server.",
+      }));
+      setServerUrl(PROD_SERVER_URL);
+      await setItem(STORAGE_KEYS.serverUrl, PROD_SERVER_URL);
+      return;
+    }
     await setItem(STORAGE_KEYS.serverUrl, serverUrl);
     checkHealth(serverUrl);
   }, [serverUrl, checkHealth]);
 
   const applyServerUrl = useCallback(
     async (nextUrl) => {
+      if (isLocalUrl(nextUrl)) {
+        setWalletStatus((prev) => ({
+          ...prev,
+          healthError: "Local servers are disabled. Use the online server.",
+        }));
+        setServerUrl(PROD_SERVER_URL);
+        await setItem(STORAGE_KEYS.serverUrl, PROD_SERVER_URL);
+        checkHealth(PROD_SERVER_URL);
+        return;
+      }
       setServerUrl(nextUrl);
       await setItem(STORAGE_KEYS.serverUrl, nextUrl);
       checkHealth(nextUrl);
@@ -304,6 +354,16 @@ export default function App() {
       const candidate =
         data.serverUrl || data.server_url || data.server || data.url || null;
       if (candidate) {
+        if (isLocalUrl(candidate)) {
+          setWalletStatus((prev) => ({
+            ...prev,
+            healthError: "Local servers are disabled. Using online server.",
+          }));
+          setServerUrl(PROD_SERVER_URL);
+          await setItem(STORAGE_KEYS.serverUrl, PROD_SERVER_URL);
+          checkHealth(PROD_SERVER_URL);
+          return;
+        }
         setServerUrl(candidate);
         await setItem(STORAGE_KEYS.serverUrl, candidate);
         checkHealth(candidate);
@@ -429,7 +489,13 @@ export default function App() {
       setToken(authPayload.token);
       setWallet(authPayload.wallet || address);
       setCredits(authPayload.credits || 0);
+      setAccountLabel("Wallet");
       setAuthStatus({ loading: false, error: null });
+      const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
+      if (!storedCharacter) {
+        setActiveTab("story");
+        setCreationVisible(true);
+      }
     } catch (error) {
       setAuthStatus({
         loading: false,
@@ -437,6 +503,34 @@ export default function App() {
       });
     }
   }, [address, provider, serverUrl]);
+
+  const signInAsGuest = useCallback(async () => {
+    setAuthStatus({ loading: true, error: null });
+    try {
+      const authPayload = await withTimeout(
+        apiPost(serverUrl, "/api/auth/guest", {}),
+        15000,
+        "Guest sign-in"
+      );
+      await setItem(STORAGE_KEYS.authToken, authPayload.token);
+      await removeItem(STORAGE_KEYS.authWallet);
+      setToken(authPayload.token);
+      setWallet(null);
+      setCredits(authPayload.credits || 0);
+      setAccountLabel("Guest");
+      setAuthStatus({ loading: false, error: null });
+      const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
+      if (!storedCharacter) {
+        setActiveTab("story");
+        setCreationVisible(true);
+      }
+    } catch (error) {
+      setAuthStatus({
+        loading: false,
+        error: error?.message || "Guest sign-in failed.",
+      });
+    }
+  }, [serverUrl]);
 
   const disconnectWallet = useCallback(async () => {
     try {
@@ -451,6 +545,7 @@ export default function App() {
     setToken(null);
     setWallet(null);
     setCredits(0);
+    setAccountLabel(null);
   }, [provider]);
 
   const resetWallet = useCallback(async () => {
@@ -493,6 +588,7 @@ export default function App() {
     setToken(null);
     setWallet(null);
     setCredits(0);
+    setAccountLabel(null);
   }, [provider]);
 
   const headerRight = (
@@ -671,9 +767,10 @@ export default function App() {
             onSaveServerUrl={saveServerUrl}
             onRefreshServerUrl={refreshServerUrl}
             onSelectServerUrl={applyServerUrl}
-            presets={{ local: LOCAL_SERVER_URL, prod: PROD_SERVER_URL }}
+            presets={{ prod: PROD_SERVER_URL }}
             updateStatus={updateStatus}
             onSignOut={disconnectWallet}
+            accountLabel={accountLabel}
             credits={credits}
           />
         </View>
@@ -693,6 +790,7 @@ export default function App() {
       applyServerUrl,
       updateStatus,
       disconnectWallet,
+      accountLabel,
       credits,
     ]
   );
@@ -721,8 +819,10 @@ export default function App() {
           onOpenWallet={openWallet}
           authStatus={authStatus}
           onSignIn={signInWithWallet}
+          onGuestSignIn={signInAsGuest}
           onDisconnect={disconnectWallet}
           onResetWallet={resetWallet}
+          accountLabel={accountLabel}
           updateStatus={updateStatus}
         />
         <WalletConnectModal

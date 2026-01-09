@@ -25,7 +25,14 @@ export default function Button({
 
   return (
     <Pressable onPress={onPress} disabled={disabled} style={containerStyle}>
-      <Text style={labelStyle}>{label}</Text>
+      <Text
+        style={labelStyle}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.6}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -33,7 +40,7 @@ export default function Button({
 const styles = StyleSheet.create({
   base: {
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     borderRadius: radius.pill,
     alignItems: "center",
     justifyContent: "center",
@@ -58,6 +65,8 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: "uppercase",
     fontSize: 12,
+    textAlign: "center",
+    flexShrink: 1,
   },
   labelGhost: {
     color: colors.parchment,
