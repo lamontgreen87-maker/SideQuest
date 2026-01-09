@@ -3,6 +3,8 @@ import {
   ActivityIndicator,
   Animated,
   FlatList,
+  Keyboard,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,9 +15,9 @@ import {
 import Button from "../components/Button";
 import { apiGet, apiPost } from "../api/client";
 import { INTRO_PROMPTS, STORAGE_KEYS } from "../config";
-import { getJson, setJson } from "../storage";
+import { getJson, removeItem, setJson } from "../storage";
 import { colors, radius, spacing } from "../theme";
-import { DEFAULT_ENEMIES, DEFAULT_PREMADES } from "../data/dnd";
+import { DEFAULT_ENEMIES, DEFAULT_PREMADES, DEFAULT_SPELLS } from "../data/dnd";
 
 const storyCache = {
   messages: [],
@@ -72,6 +74,14 @@ function sanitizeIntro(text) {
   return trimmed;
 }
 
+function stripThinking(text) {
+  if (!text) return text;
+  let cleaned = String(text);
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  cleaned = cleaned.replace(/^(thoughts?|thinking|analysis)\s*:\s*/i, "").trim();
+  return cleaned;
+}
+
 export default function StoryScreen({
   serverUrl,
   onCreditsUpdate,
@@ -80,14 +90,35 @@ export default function StoryScreen({
   onCharacterEntryHandled,
   sessionEntry,
   onSessionEntryHandled,
+  resetSessionToken,
+  currentCharacter,
 }) {
   const messageSeq = useRef(0);
+  const introRequestRef = useRef({ key: null, inFlight: false });
+  const makeId = useCallback(
+    () => `${Date.now()}-${messageSeq.current++}`,
+    []
+  );
+  const normalizeMessages = useCallback(
+    (list) =>
+      (list || []).map((msg) =>
+        msg?.id
+          ? msg
+          : {
+              ...msg,
+              id: makeId(),
+            }
+      ),
+    [makeId]
+  );
   const [sessionId, setSessionId] = useState(storyCache.sessionId);
   const [messages, setMessages] = useState(
-    storyCache.messages.length ? storyCache.messages : []
+    storyCache.messages.length ? normalizeMessages(storyCache.messages) : []
   );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resendReady, setResendReady] = useState(false);
+  const [resendMessage, setResendMessage] = useState("");
   const [pcs, setPcs] = useState([]);
   const [pcCatalog, setPcCatalog] = useState({});
   const [pcId, setPcId] = useState(null);
@@ -97,28 +128,68 @@ export default function StoryScreen({
   const [weaponOptions, setWeaponOptions] = useState([]);
   const [combatBusy, setCombatBusy] = useState(false);
   const [drawerExpanded, setDrawerExpanded] = useState(false);
+  const [showSpellMenu, setShowSpellMenu] = useState(false);
+  const [spellMenuOptions, setSpellMenuOptions] = useState([]);
+  const [spellMenuLoading, setSpellMenuLoading] = useState(false);
+  const [spellCatalogMap, setSpellCatalogMap] = useState({});
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+  const [inventoryInput, setInventoryInput] = useState("");
+  const [inventoryItems, setInventoryItems] = useState([]);
   const drawerAnimation = useRef(new Animated.Value(0)).current;
   const [checkMode, setCheckMode] = useState("skill");
   const [checkResult, setCheckResult] = useState(null);
   const [checkBusy, setCheckBusy] = useState(false);
+  const [playerTurn, setPlayerTurn] = useState(true);
   const [checkUsed, setCheckUsed] = useState(false);
   const [rulesSeeded, setRulesSeeded] = useState(false);
   const [adventureLoading, setAdventureLoading] = useState(false);
   const [loadingFlavorIndex, setLoadingFlavorIndex] = useState(0);
+  const keyboardTranslate = useRef(new Animated.Value(0)).current;
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const shouldNarrate = useCallback(() => Math.random() < 0.5, []);
+  const normalizeSpellKey = useCallback(
+    (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " "),
+    []
+  );
   const selectedPc = useMemo(() => pcCatalog[pcId] || null, [pcCatalog, pcId]);
+  const normalizeSpellClasses = useCallback((value) => {
+    if (Array.isArray(value)) {
+      return value.map((entry) => String(entry).trim()).filter(Boolean);
+    }
+    if (typeof value === "string") {
+      return value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }, []);
+  const spellOptions = useMemo(() => {
+    const source = currentCharacter || {};
+    const combined = [
+      ...(source.prepared_spells || []),
+      ...(source.known_spells || []),
+      ...(source.spellbook || []),
+    ];
+    const unique = [...new Set(combined.map((entry) => String(entry).trim()).filter(Boolean))];
+    return unique;
+  }, [currentCharacter]);
+  const combinedSpellOptions = useMemo(
+    () => (spellOptions.length ? spellOptions : spellMenuOptions),
+    [spellOptions, spellMenuOptions]
+  );
   const buildSessionTitle = useCallback((list) => {
     const firstAssistant = list.find((msg) => msg.role === "assistant");
     const raw = firstAssistant?.content || "New Adventure";
     const cleaned = raw.replace(/\s+/g, " ").trim();
     return cleaned.length > 48 ? `${cleaned.slice(0, 48)}...` : cleaned;
-  }, []);
+  }, [makeMessage]);
   const buildSessionPreview = useCallback((list) => {
     const lastAssistant = [...list].reverse().find((msg) => msg.role === "assistant");
     const raw = lastAssistant?.content || "";
     const cleaned = raw.replace(/\s+/g, " ").trim();
     return cleaned.length > 80 ? `${cleaned.slice(0, 80)}...` : cleaned;
-  }, []);
+  }, [makeMessage]);
   const skillOptions = useMemo(
     () => selectedPc?.skill_proficiencies || [],
     [selectedPc]
@@ -136,18 +207,78 @@ export default function StoryScreen({
     () => typeof serverUrl === "string" && serverUrl.includes("sidequestai.org"),
     [serverUrl]
   );
-  const makeMessage = useCallback((role, content) => {
-    return {
-      id: `${Date.now()}-${messageSeq.current++}`,
+  const makeMessage = useCallback(
+    (role, content) => ({
+      id: makeId(),
       role,
       content,
-    };
-  }, []);
+    }),
+    [makeId]
+  );
   const shouldCheckStatus = useCallback((errorMessage) => {
     if (!errorMessage) return false;
     const text = String(errorMessage).toLowerCase();
     return text.includes("524") || text.includes("timeout") || text.includes("timed out");
-  }, []);
+  }, [makeMessage]);
+  const sleep = useCallback(
+    (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    []
+  );
+  const pollSessionReply = useCallback(
+    async (id, attempts = 6, delayMs = 5000) => {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          const status = await apiGet(serverUrl, `/api/sessions/${id}/status`);
+          const serverReply = status?.last_assistant_message;
+          if (!status?.pending_reply && serverReply) {
+            return serverReply;
+          }
+        } catch (error) {
+          // ignore and keep polling
+        }
+        await sleep(delayMs);
+      }
+      return null;
+    },
+    [serverUrl, sleep]
+  );
+
+  const appendAssistantResponse = useCallback(
+    (response) => {
+      if (!response) return;
+      const nextInventory = response?.game_state?.inventory;
+      if (Array.isArray(nextInventory)) {
+        setInventoryItems(nextInventory);
+      }
+      if (Array.isArray(response?.response_parts) && response.response_parts.length) {
+        response.response_parts.forEach((part) => {
+          const cleaned = stripThinking(part);
+          if (!cleaned) return;
+          setMessages((prev) => {
+            const lastAssistant = [...prev].reverse().find((msg) => msg.role === "assistant");
+            if (lastAssistant?.content === cleaned) return prev;
+            return [...prev, makeMessage("assistant", cleaned)];
+          });
+        });
+        return;
+      }
+      const aiContent = stripThinking(
+        response?.response ??
+          response?.assistant ??
+          response?.content ??
+          response?.narration ??
+          response?.message
+      );
+      if (aiContent) {
+        setMessages((prev) => {
+          const lastAssistant = [...prev].reverse().find((msg) => msg.role === "assistant");
+          if (lastAssistant?.content === aiContent) return prev;
+          return [...prev, makeMessage("assistant", aiContent)];
+        });
+      }
+    },
+    [makeMessage]
+  );
 
   const ensureSession = useCallback(async () => {
     if (sessionId) {
@@ -171,7 +302,7 @@ export default function StoryScreen({
           apiPost(serverUrl, "/api/intro", payload),
           new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
         ]);
-        return response?.intro || null;
+        return stripThinking(response?.intro || null);
       } catch (error) {
         return null;
       }
@@ -179,63 +310,66 @@ export default function StoryScreen({
     [serverUrl]
   );
 
-  const generateIntroViaChat = useCallback(
-    async (name, klass) => {
+  const fetchSessionIntro = useCallback(
+    async (id, character) => {
       try {
-        const id = await ensureSession();
-        const identity = name && klass ? `${name} the ${klass}` : name || klass || "the hero";
-        const message = [
-          `Start a vivid opening scene in 2-4 sentences for ${identity}.`,
-          "Make it specific, atmospheric, and end with a direct question.",
-          "Avoid tavern starts and keep it punchy for mobile.",
-        ].join(" ");
-        const response = await apiPost(serverUrl, `/api/sessions/${id}/messages`, { message });
-        return (
-          response?.response ??
-          response?.assistant ??
-          response?.content ??
-          response?.narration ??
-          response?.message ??
-          null
-        );
+        const payload = {
+          name: character?.name || undefined,
+          klass: character?.klass || undefined,
+          character: character || undefined,
+        };
+        const response = await Promise.race([
+          apiPost(serverUrl, `/api/sessions/${id}/intro`, payload),
+          new Promise((resolve) => setTimeout(() => resolve(null), 15000)),
+        ]);
+        return response?.intro ? sanitizeIntro(response.intro) : null;
       } catch (error) {
         return null;
       }
     },
-    [ensureSession, serverUrl]
+    [serverUrl]
   );
 
   const getIntro = useCallback(
     async (name, klass) => {
       const apiIntro = sanitizeIntro(await fetchAiIntro(name, klass));
       if (apiIntro) return apiIntro;
-      const chatIntro = sanitizeIntro(await generateIntroViaChat(name, klass));
-      if (chatIntro) return chatIntro;
       return pickFallbackIntro() || pickIntro();
     },
-    [fetchAiIntro, generateIntroViaChat]
+    [fetchAiIntro]
   );
 
   const loadSession = useCallback(async () => {
+    if (messages.length) {
+      setAdventureLoading(false);
+      return;
+    }
+    const introKey = "cold-start";
+    if (introRequestRef.current.inFlight && introRequestRef.current.key === introKey) {
+      return;
+    }
+    introRequestRef.current = { key: introKey, inFlight: true };
     const storedId = await getJson(STORAGE_KEYS.lastSession, null);
     if (storedId) {
       setSessionId(storedId);
       const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
       const entry = storedSessions.find((session) => session.id === storedId);
       if (entry?.messages?.length) {
-        setMessages(entry.messages);
+        setMessages(normalizeMessages(entry.messages));
       }
       setAdventureLoading(false);
+      introRequestRef.current = { key: introKey, inFlight: false };
       return;
     }
     setAdventureLoading(true);
     const intro = await getIntro();
     setTimeout(() => {
-      setMessages([{ role: "assistant", content: intro }]);
+      setMessages([makeMessage("assistant", intro)]);
       setRulesSeeded(true);
       setAdventureLoading(false);
+      introRequestRef.current = { key: introKey, inFlight: false };
     }, 900);
-  }, [getIntro]);
+  }, [getIntro, makeMessage, normalizeMessages, messages.length]);
 
   useEffect(() => {
     loadSession();
@@ -254,6 +388,30 @@ export default function StoryScreen({
     }, 900);
     return () => clearInterval(interval);
   }, [adventureLoading]);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener("keyboardDidShow", (event) => {
+      const height = event.endCoordinates?.height || 260;
+      setKeyboardOpen(true);
+      Animated.timing(keyboardTranslate, {
+        toValue: -height,
+        duration: Platform.OS === "android" ? 120 : 180,
+        useNativeDriver: true,
+      }).start();
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardOpen(false);
+      Animated.timing(keyboardTranslate, {
+        toValue: 0,
+        duration: Platform.OS === "android" ? 120 : 180,
+        useNativeDriver: true,
+      }).start();
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [keyboardTranslate]);
 
   const loadCombatCatalogs = useCallback(async () => {
     try {
@@ -294,14 +452,23 @@ export default function StoryScreen({
     loadCombatCatalogs();
   }, [loadCombatCatalogs]);
 
+  useEffect(() => {
+    if (currentCharacter?.id) {
+      setPcId(currentCharacter.id);
+      setRulesSessionId(null);
+    }
+  }, [currentCharacter]);
+
   const createRulesSession = useCallback(
     async (announce = false) => {
       if (!pcId || !enemyId) {
         throw new Error("Select a combatant first.");
       }
+      const storySessionId = await ensureSession();
       const response = await apiPost(serverUrl, "/api/rules/sessions", {
         pc_id: pcId,
         enemy_id: enemyId,
+        story_session_id: storySessionId,
       });
       setRulesSessionId(response.session_id);
       const weaponEntries = response?.pc?.weapons || {};
@@ -316,15 +483,15 @@ export default function StoryScreen({
       if (announce) {
         setMessages((prev) => [
           ...prev,
-          {
-            role: "assistant",
-            content: `Combat starts: ${response.pc?.name} vs ${response.enemy?.name}.`,
-          },
+          makeMessage(
+            "assistant",
+            `Combat starts: ${response.pc?.name} vs ${response.enemy?.name}.`
+          ),
         ]);
       }
       return response.session_id;
     },
-    [serverUrl, pcId, enemyId]
+    [serverUrl, pcId, enemyId, makeMessage, ensureSession]
   );
 
   const ensureRulesSession = useCallback(
@@ -339,35 +506,47 @@ export default function StoryScreen({
     if (!pcId || !enemyId) return;
     setCombatBusy(true);
     try {
+      const roll = Math.floor(Math.random() * 20) + 1;
+      const actionText = `Initiative roll: ${roll}.`;
+      setMessages((prev) => [...prev, makeMessage("assistant", actionText)]);
       await ensureRulesSession(true);
+      sendActionMessage(actionText);
     } catch (error) {
       console.error("Failed to start combat", error);
     } finally {
       setCombatBusy(false);
     }
-  }, [ensureRulesSession, pcId, enemyId]);
+  }, [ensureRulesSession, pcId, enemyId, makeMessage, sendActionMessage]);
 
   const runAttack = useCallback(async () => {
-    if (!rulesSessionId) return;
     setCombatBusy(true);
     try {
+      let id = rulesSessionId;
+      if (!id) {
+        id = await ensureRulesSession(true);
+      }
       const narrate = shouldNarrate();
       const response = await apiPost(
         serverUrl,
-        `/api/rules/sessions/${rulesSessionId}/attack${narrate ? "?narrate=true" : ""}`,
+        `/api/rules/sessions/${id}/attack${narrate ? "?narrate=true" : ""}`,
         { weapon_id: weaponId || undefined }
       );
-      const summary = `${response.attacker} attacks: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
-      setMessages((prev) => [...prev, { role: "assistant", content: summary }]);
+      const attackerName = response?.attacker_name || "You";
+      const summary = `${attackerName} attacks: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
+      setMessages((prev) => [...prev, makeMessage("assistant", summary)]);
       if (response?.narration) {
-        setMessages((prev) => [...prev, { role: "assistant", content: response.narration }]);
+        setMessages((prev) => [
+          ...prev,
+          makeMessage("assistant", response.narration),
+        ]);
       }
+      setPlayerTurn(false);
     } catch (error) {
       console.error("Attack failed", error);
     } finally {
       setCombatBusy(false);
     }
-  }, [serverUrl, rulesSessionId, weaponId, shouldNarrate]);
+  }, [serverUrl, rulesSessionId, weaponId, shouldNarrate, makeMessage, ensureRulesSession]);
 
   const runEnemyTurn = useCallback(async () => {
     if (!rulesSessionId) return;
@@ -379,48 +558,46 @@ export default function StoryScreen({
         `/api/rules/sessions/${rulesSessionId}/enemy_turn${narrate ? "?narrate=true" : ""}`,
         {}
       );
-      const summary = `${response.attacker} strikes: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
-      setMessages((prev) => [...prev, { role: "assistant", content: summary }]);
+      const attackerName = response?.attacker_name || "Enemy";
+      const summary = `${attackerName} strikes: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type}.`;
+      setMessages((prev) => [...prev, makeMessage("assistant", summary)]);
       if (response?.narration) {
-        setMessages((prev) => [...prev, { role: "assistant", content: response.narration }]);
+        setMessages((prev) => [
+          ...prev,
+          makeMessage("assistant", response.narration),
+        ]);
       }
       setCheckUsed(false);
+      setPlayerTurn(true);
     } catch (error) {
       console.error("Enemy turn failed", error);
     } finally {
       setCombatBusy(false);
     }
-  }, [serverUrl, rulesSessionId, shouldNarrate]);
+  }, [serverUrl, rulesSessionId, shouldNarrate, makeMessage, playerTurn]);
 
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim();
-    if (!trimmed || loading) return;
+    const payloadMessage = trimmed || resendMessage;
+    if (!payloadMessage || loading) return;
     setLoading(true);
     setInput("");
-    const nextMessages = [...messages, makeMessage("user", trimmed)];
-    setMessages(nextMessages);
+    setResendReady(false);
+    setResendMessage("");
+    setMessages((prev) => [...prev, makeMessage("user", payloadMessage)]);
     let id = null;
     try {
       id = await ensureSession();
-      const response = await apiPost(serverUrl, `/api/sessions/${id}/messages`, {
-        message: trimmed,
-        fast: isRemoteServer ? true : undefined,
-      });
-      const aiContent =
-        response?.response ??
-        response?.assistant ??
-        response?.content ??
-        response?.narration ??
-        response?.message;
-      if (aiContent) {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant" && last?.content === aiContent) {
-            return prev;
-          }
-          return [...prev, makeMessage("assistant", aiContent)];
-        });
-      }
+      const response = await Promise.race([
+        apiPost(serverUrl, `/api/sessions/${id}/messages`, {
+          message: payloadMessage,
+          fast: isRemoteServer ? true : undefined,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Request timed out")), 120000)
+        ),
+      ]);
+      appendAssistantResponse(response);
       if (response?.credits && onCreditsUpdate) {
         onCreditsUpdate(response.credits);
       }
@@ -429,22 +606,23 @@ export default function StoryScreen({
       const canCheck = shouldCheckStatus(errorMessage) && id;
       if (canCheck) {
         try {
-          const status = await apiGet(serverUrl, `/api/sessions/${id}/status`);
-          const serverReply = status?.last_assistant_message;
-          if (!status?.pending_reply && serverReply) {
+          const serverReply = await pollSessionReply(id);
+          if (serverReply) {
             setMessages((prev) => {
-              const last = prev[prev.length - 1];
-              if (last?.role === "assistant" && last?.content === serverReply) {
-                return prev;
-              }
+              const lastAssistant = [...prev].reverse().find((msg) => msg.role === "assistant");
+              if (lastAssistant?.content === serverReply) return prev;
               return [...prev, makeMessage("assistant", serverReply)];
             });
             return;
           }
           setMessages((prev) => [
             ...prev,
-            makeMessage("assistant", "Still thinking... try again in a moment."),
+            makeMessage("assistant", "GM is still thinking. Check again in a moment."),
           ]);
+          if (!status?.pending_reply) {
+            setResendReady(true);
+            setResendMessage(payloadMessage);
+          }
           return;
         } catch (statusError) {
           // fall through to default error message
@@ -453,15 +631,67 @@ export default function StoryScreen({
       const briefError =
         errorMessage.length < 300 ? errorMessage : "Request failed. Try again.";
       setMessages((prev) => [...prev, makeMessage("assistant", briefError)]);
+      setResendReady(true);
+      setResendMessage(payloadMessage);
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, ensureSession, serverUrl, onCreditsUpdate]);
+  }, [
+    input,
+    loading,
+    resendMessage,
+    appendAssistantResponse,
+    ensureSession,
+    serverUrl,
+    onCreditsUpdate,
+    isRemoteServer,
+    makeMessage,
+    shouldCheckStatus,
+    pollSessionReply,
+  ]);
 
+  const sendActionMessage = useCallback(
+    async (actionText) => {
+      if (!actionText) return;
+      setLoading(true);
+      setCombatBusy(true);
+      let id = null;
+      try {
+        id = await ensureSession();
+        const response = await apiPost(serverUrl, `/api/sessions/${id}/messages`, {
+          message: actionText,
+          fast: isRemoteServer ? true : undefined,
+        });
+        appendAssistantResponse(response);
+        if (response?.credits && onCreditsUpdate) {
+          onCreditsUpdate(response.credits);
+        }
+      } catch (error) {
+        const errorMessage = error?.message || "Request failed.";
+        setMessages((prev) => [
+          ...prev,
+          makeMessage("assistant", errorMessage.length < 200 ? errorMessage : "Request failed."),
+        ]);
+      } finally {
+        setLoading(false);
+        setCombatBusy(false);
+      }
+    },
+    [appendAssistantResponse, ensureSession, serverUrl, onCreditsUpdate, isRemoteServer, makeMessage]
+  );
+
+  const listRef = useRef(null);
   const data = useMemo(
     () => messages.map((msg, index) => ({ id: msg.id ?? `${index}`, ...msg })),
     [messages]
   );
+
+  useEffect(() => {
+    if (!messages.length) return;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    });
+  }, [messages.length]);
 
   useEffect(() => {
     storyCache.messages = messages;
@@ -470,6 +700,21 @@ export default function StoryScreen({
   useEffect(() => {
     storyCache.sessionId = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!resetSessionToken) return;
+    setSessionId(null);
+    setMessages([]);
+    setRulesSeeded(false);
+    setAdventureLoading(false);
+    setRulesSessionId(null);
+    setCheckResult(null);
+    setCheckUsed(false);
+    setDrawerExpanded(false);
+    storyCache.messages = [];
+    storyCache.sessionId = null;
+    removeItem(STORAGE_KEYS.lastSession);
+  }, [resetSessionToken]);
 
   useEffect(() => {
     if (!sessionId || !messages.length) return;
@@ -499,7 +744,7 @@ export default function StoryScreen({
       setJson(STORAGE_KEYS.lastSession, sessionEntry.id);
     }
     if (entryMessages.length) {
-      setMessages(entryMessages);
+      setMessages(normalizeMessages(entryMessages));
       setRulesSeeded(true);
       setAdventureLoading(false);
     }
@@ -510,26 +755,45 @@ export default function StoryScreen({
     if (!characterEntry) return;
     const name = characterEntry.name || "Adventurer";
     const klass = characterEntry.klass || "Hero";
+    const introKey = `${name}|${klass}`;
+    if (introRequestRef.current.inFlight && introRequestRef.current.key === introKey) {
+      return;
+    }
+    introRequestRef.current = { key: introKey, inFlight: true };
     setAdventureLoading(true);
     let isActive = true;
-    getIntro(name, klass).then((intro) => {
-      if (!isActive) return;
-      setTimeout(() => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: intro,
-          },
-        ]);
-        setAdventureLoading(false);
-        onCharacterEntryHandled?.();
-      }, 900);
-    });
+    ensureSession()
+      .then(async (id) => {
+        const sessionIntro = await fetchSessionIntro(id, characterEntry);
+        if (sessionIntro) return sessionIntro;
+        return getIntro(name, klass);
+      })
+      .then((intro) => {
+        if (!isActive) return;
+        setTimeout(() => {
+          setMessages((prev) => [
+            ...prev,
+            makeMessage("assistant", intro),
+          ]);
+          setAdventureLoading(false);
+          introRequestRef.current = { key: introKey, inFlight: false };
+          onCharacterEntryHandled?.();
+        }, 900);
+      });
     return () => {
       isActive = false;
+      if (introRequestRef.current.key === introKey) {
+        introRequestRef.current = { key: introKey, inFlight: false };
+      }
     };
-  }, [characterEntry, onCharacterEntryHandled, getIntro]);
+  }, [
+    characterEntry,
+    onCharacterEntryHandled,
+    getIntro,
+    makeMessage,
+    ensureSession,
+    fetchSessionIntro,
+  ]);
 
   const checkModeButtons = useMemo(
     () => [
@@ -554,7 +818,7 @@ export default function StoryScreen({
     if (checkUsed) {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "Only one check per turn." },
+        makeMessage("assistant", "Only one check per turn."),
       ]);
       return;
     }
@@ -577,12 +841,12 @@ export default function StoryScreen({
       setCheckResult(response);
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `${label} = ${response?.total ?? "-"}` },
+        makeMessage("assistant", `${label} = ${response?.total ?? "-"}`),
       ]);
       if (response?.narration) {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: response.narration },
+          makeMessage("assistant", response.narration),
         ]);
       }
       setCheckUsed(true);
@@ -598,6 +862,7 @@ export default function StoryScreen({
     ensureCheckSession,
     serverUrl,
     shouldNarrate,
+    makeMessage,
   ]);
 
   const handleSkillCheck = useCallback(
@@ -620,6 +885,21 @@ export default function StoryScreen({
     },
     [runCheck]
   );
+  const handleCheckModeSelect = useCallback(
+    (modeId) => {
+      if (
+        modeId === "save" &&
+        saveOptions.length === 1 &&
+        !checkBusy &&
+        !checkUsed
+      ) {
+        handleSaveCheck(saveOptions[0]);
+        return;
+      }
+      setCheckMode(modeId);
+    },
+    [saveOptions, checkBusy, checkUsed, handleSaveCheck]
+  );
   const toggleDrawer = useCallback(() => {
     setDrawerExpanded((prev) => !prev);
   }, []);
@@ -628,23 +908,141 @@ export default function StoryScreen({
     setWeaponId(id);
     setMessages((prev) => [
       ...prev,
-      { role: "assistant", content: `Equipped ${id}.` },
+      makeMessage("assistant", `Equipped ${id}.`),
     ]);
-  }, []);
+  }, [makeMessage]);
 
-  const handleInitiative = useCallback(() => {
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "Initiative rolled." },
-    ]);
-  }, []);
+  const handleSpellCast = useCallback(
+    async (spellName) => {
+      if (!spellName) return;
+      const spellId = spellCatalogMap[normalizeSpellKey(spellName)] || spellName;
+      const actionText = `Cast ${spellName}.`;
+      let storyActionText = actionText;
+      setMessages((prev) => [...prev, makeMessage("user", actionText)]);
+      setShowSpellMenu(false);
+      setPlayerTurn(false);
+      setCombatBusy(true);
+      try {
+        const id = await ensureRulesSession(true);
+        const narrate = shouldNarrate();
+        const response = await apiPost(
+          serverUrl,
+          `/api/rules/sessions/${id}/cast${narrate ? "?narrate=true" : ""}`,
+          { spell_id: spellId }
+        );
+        const spellLabel = response?.name || spellName;
+        let summary = `${spellLabel} cast.`;
+        if (response?.attack_total !== null && response?.attack_total !== undefined) {
+          summary = `${spellLabel} ${response.hit ? "hits" : "misses"}: ${response.attack_total} to hit.`;
+          if (response.damage_total) {
+            summary = `${spellLabel} ${response.hit ? "hits" : "misses"}: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type || "magic"}.`;
+          }
+        } else if (response?.save) {
+          summary = `${spellLabel} forces a ${response.save.toUpperCase()} save (${response.attack_total ?? "-" } vs DC ${response.dc ?? "-" }).`;
+          if (response.damage_total) {
+            summary += ` Deals ${response.damage_total} ${response.damage_type || "magic"} damage.`;
+          }
+        } else if (response?.damage_total) {
+          summary = `${spellLabel} hits for ${response.damage_total} ${response.damage_type || "magic"} damage.`;
+        }
+        storyActionText = summary;
+        setMessages((prev) => [...prev, makeMessage("assistant", summary)]);
+        if (response?.narration) {
+          setMessages((prev) => [
+            ...prev,
+            makeMessage("assistant", response.narration),
+          ]);
+        }
+      } catch (error) {
+        console.error("Spell cast failed", error);
+      } finally {
+        setCombatBusy(false);
+      }
+      sendActionMessage(storyActionText);
+    },
+    [
+      makeMessage,
+      sendActionMessage,
+      ensureRulesSession,
+      serverUrl,
+      shouldNarrate,
+      spellCatalogMap,
+      normalizeSpellKey,
+    ]
+  );
+
+  const loadClassSpells = useCallback(async () => {
+    const klass = currentCharacter?.klass;
+    if (!klass) return;
+    setSpellMenuLoading(true);
+    try {
+      const data = await apiGet(serverUrl, "/api/rules/spells");
+      const fallback =
+        data && Object.keys(data).length
+          ? data
+          : DEFAULT_SPELLS.reduce((acc, entry) => {
+              acc[entry.id] = entry;
+              return acc;
+            }, {});
+      const nameMap = {};
+      Object.entries(fallback).forEach(([id, payload]) => {
+        const name = payload.name;
+        if (name) {
+          nameMap[normalizeSpellKey(name)] = id;
+        }
+      });
+      if (Object.keys(nameMap).length) {
+        setSpellCatalogMap(nameMap);
+      }
+      const list = Object.values(fallback).map((payload) => ({
+        name: payload.name,
+        classes: normalizeSpellClasses(payload.classes),
+      }));
+      const target = String(klass).toLowerCase().trim();
+      const filtered = list
+        .filter((spell) =>
+          spell.classes?.some((cls) => String(cls).toLowerCase().trim() === target)
+        )
+        .map((spell) => spell.name)
+        .filter(Boolean);
+      setSpellMenuOptions([...new Set(filtered)]);
+      if (!filtered.length) {
+        setMessages((prev) => [
+          ...prev,
+          makeMessage(
+            "assistant",
+            `No spells found for class ${klass}.`
+          ),
+        ]);
+      }
+    } catch (error) {
+      // ignore load failure
+    } finally {
+      setSpellMenuLoading(false);
+    }
+  }, [currentCharacter, serverUrl, normalizeSpellClasses, normalizeSpellKey]);
+
+  useEffect(() => {
+    if (!showSpellMenu) return;
+    if (spellOptions.length) return;
+    if (spellMenuOptions.length) return;
+    loadClassSpells();
+  }, [showSpellMenu, spellOptions.length, spellMenuOptions.length, loadClassSpells]);
 
   const handleInventory = useCallback(() => {
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "Inventory toggled." },
-    ]);
+    setInventoryOpen((prev) => !prev);
   }, []);
+
+  const handleUseItem = useCallback(() => {
+    const itemText = inventoryInput.trim();
+    if (!itemText) return;
+    const actionText = `Use ${itemText}.`;
+    setMessages((prev) => [...prev, makeMessage("user", actionText)]);
+    sendActionMessage(actionText);
+    setInventoryInput("");
+    setInventoryOpen(false);
+    setPlayerTurn(false);
+  }, [inventoryInput, makeMessage, sendActionMessage]);
 
   useEffect(() => {
     if (rulesSessionId) {
@@ -654,6 +1052,12 @@ export default function StoryScreen({
 
   useEffect(() => {
     setCheckUsed(false);
+  }, [rulesSessionId]);
+
+  useEffect(() => {
+    if (!rulesSessionId) {
+      setPlayerTurn(true);
+    }
   }, [rulesSessionId]);
 
   useEffect(() => {
@@ -676,12 +1080,17 @@ export default function StoryScreen({
     extrapolate: "clamp",
   });
 
-  const drawerLabel = rulesSessionId ? "Combat controls" : "Combat drawer";
+  const drawerLabel = drawerExpanded
+    ? "Minimise"
+    : rulesSessionId
+      ? "Combat controls"
+      : "Combat drawer";
 
   return (
     <View style={styles.root}>
       <View style={styles.chatArea}>
         <FlatList
+          ref={listRef}
           data={data}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
@@ -705,7 +1114,7 @@ export default function StoryScreen({
           style={styles.list}
           keyboardShouldPersistTaps="handled"
         />
-        {loading && !adventureLoading && (
+        {(loading || combatBusy || checkBusy) && !adventureLoading && (
           <View style={styles.loadingOverlay} pointerEvents="none">
             <ActivityIndicator size="large" color={colors.gold} />
             <Text style={styles.loadingLabel}>The GM is thinking...</Text>
@@ -720,7 +1129,19 @@ export default function StoryScreen({
           </View>
         )}
       </View>
-      <View style={styles.inputArea}>
+      <Animated.View
+        style={[
+          styles.inputArea,
+          {
+            transform: [{ translateY: keyboardTranslate }],
+            bottom: keyboardOpen
+              ? spacing.xs
+              : DRAWER_COLLAPSED_HEIGHT +
+                (drawerExpanded ? DRAWER_CONTENT_HEIGHT : 0) +
+                spacing.xs,
+          },
+        ]}
+      >
         <TextInput
           style={styles.input}
           value={input}
@@ -729,11 +1150,11 @@ export default function StoryScreen({
           placeholderTextColor={colors.mutedGold}
         />
         <Button
-          label={loading ? "..." : "Send"}
+          label={loading ? "..." : resendReady ? "Resend" : "Send"}
           onPress={sendMessage}
-          disabled={!input.trim() || loading}
+          disabled={(!input.trim() && !resendReady) || loading}
         />
-      </View>
+      </Animated.View>
       <Animated.View
         style={[styles.drawer, { transform: [{ translateY: drawerSlide }] }]}
       >
@@ -756,57 +1177,27 @@ export default function StoryScreen({
             showsVerticalScrollIndicator
             keyboardShouldPersistTaps="handled"
           >
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.selectorRow}
-            >
-              {pcs.map((pc) => (
-                <Text
-                  key={pc.id}
-                  style={[styles.pill, pc.id === pcId && styles.pillActive]}
-                  onPress={() => {
-                    setPcId(pc.id);
-                    setRulesSessionId(null);
-                  }}
-                >
-                  {pc.name}
-                </Text>
-              ))}
-            </ScrollView>
             <View style={styles.drawerButtonRow}>
-              {rulesSessionId ? (
+              {rulesSessionId && playerTurn ? (
                 <Button
                   label="Attack"
                   onPress={runAttack}
                   disabled={combatBusy}
                 />
-              ) : (
-                <Button
-                  label={combatBusy ? "..." : "Start Combat"}
-                  onPress={startCombat}
-                  disabled={combatBusy}
-                />
-              )}
+              ) : null}
               <Button
                 label="Enemy Turn"
                 onPress={runEnemyTurn}
-                disabled={combatBusy || !rulesSessionId}
-                variant="ghost"
+                disabled={combatBusy || !rulesSessionId || playerTurn}
+                variant={playerTurn ? "ghost" : "primary"}
               />
               <Button
                 label="Spells"
-                onPress={() => onNavigate?.("spells")}
+                onPress={() => setShowSpellMenu((prev) => !prev)}
                 variant="ghost"
               />
             </View>
             <View style={styles.drawerButtonRow}>
-              <Button
-                label="Initiative"
-                onPress={handleInitiative}
-                variant="ghost"
-                style={styles.halfButton}
-              />
               <Button
                 label="Inventory"
                 onPress={handleInventory}
@@ -814,6 +1205,64 @@ export default function StoryScreen({
                 style={styles.halfButton}
               />
             </View>
+            {inventoryOpen ? (
+              <View style={styles.inventoryRow}>
+                <TextInput
+                  style={[styles.drawerInput, styles.inventoryInput]}
+                  value={inventoryInput}
+                  onChangeText={setInventoryInput}
+                  placeholder="Use item..."
+                  placeholderTextColor={colors.mutedGold}
+                />
+                <Button
+                  label="Use Item"
+                  onPress={handleUseItem}
+                  style={styles.inventoryButton}
+                  disabled={combatBusy || !inventoryInput.trim()}
+                />
+              </View>
+            ) : null}
+            {inventoryOpen && inventoryItems.length ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.weaponRow}
+              >
+                {inventoryItems.map((item) => (
+                  <Button
+                    key={item}
+                    label={item}
+                    onPress={() => setInventoryInput(item)}
+                    variant="ghost"
+                    style={styles.weaponButton}
+                  />
+                ))}
+              </ScrollView>
+            ) : null}
+            {showSpellMenu ? (
+              combinedSpellOptions.length ? (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.weaponRow}
+                >
+                  {combinedSpellOptions.map((spell) => (
+                    <Button
+                      key={spell}
+                      label={spell}
+                      onPress={() => handleSpellCast(spell)}
+                      variant="ghost"
+                      style={styles.weaponButton}
+                      disabled={combatBusy}
+                    />
+                  ))}
+                </ScrollView>
+              ) : spellMenuLoading ? (
+                <Text style={styles.muted}>Loading spells...</Text>
+              ) : (
+                <Text style={styles.muted}>No spells available.</Text>
+              )
+            ) : null}
             {!!weaponOptions.length && (
               <ScrollView
                 horizontal
@@ -842,7 +1291,7 @@ export default function StoryScreen({
                       modeOption.id === checkMode && styles.pillActive,
                       !checkBusy && styles.checkModePill,
                     ]}
-                    onPress={() => setCheckMode(modeOption.id)}
+                    onPress={() => handleCheckModeSelect(modeOption.id)}
                   >
                     {modeOption.label}
                   </Text>
@@ -945,6 +1394,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.panel,
     padding: spacing.md,
+    paddingBottom: spacing.lg + 72,
     width: "100%",
     position: "relative",
     zIndex: 1,
@@ -958,8 +1408,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: DRAWER_COLLAPSED_HEIGHT + spacing.xs - 24,
+    zIndex: 5,
+    elevation: 5,
     width: "100%",
   },
   list: {
@@ -1107,6 +1561,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     color: colors.parchment,
     backgroundColor: colors.panelAlt,
+  },
+  inventoryRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "center",
+  },
+  inventoryInput: {
+    flex: 1,
+  },
+  inventoryButton: {
+    minWidth: 120,
   },
   checkModePill: {
     borderColor: colors.gold,

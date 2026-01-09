@@ -1,6 +1,7 @@
 param(
     [string]$LogPath = (Join-Path $env:LOCALAPPDATA "SideQuest\run-ai-server.log"),
     [string]$ErrLogPath = (Join-Path $env:LOCALAPPDATA "SideQuest\run-ai-server.log.err"),
+    [string]$ClerkLogPath = (Join-Path $env:LOCALAPPDATA "SideQuest\clerk.log"),
     [string[]]$PingTargets = @("http://127.0.0.1:8000", "http://127.0.0.1:11434"),
     [int]$TailLines = 400,
     [int]$RefreshMs = 1000
@@ -30,38 +31,100 @@ $copyErrButton.Text = "Copy errors to clipboard"
 $copyErrButton.AutoSize = $true
 $copyErrButton.Location = New-Object System.Drawing.Point(170, 36)
 
+$copyClerkButton = New-Object System.Windows.Forms.Button
+$copyClerkButton.Text = "Copy clerk log"
+$copyClerkButton.AutoSize = $true
+$copyClerkButton.Location = New-Object System.Drawing.Point(330, 36)
+
 $pingButton = New-Object System.Windows.Forms.Button
 $pingButton.Text = "Ping servers"
 $pingButton.AutoSize = $true
-$pingButton.Location = New-Object System.Drawing.Point(360, 36)
+$pingButton.Location = New-Object System.Drawing.Point(460, 36)
 
 $restartButton = New-Object System.Windows.Forms.Button
 $restartButton.Text = "Restart AI server"
 $restartButton.AutoSize = $true
-$restartButton.Location = New-Object System.Drawing.Point(470, 36)
+$restartButton.Location = New-Object System.Drawing.Point(570, 36)
 
 $toggleErrors = New-Object System.Windows.Forms.CheckBox
 $toggleErrors.Text = "Show errors"
 $toggleErrors.AutoSize = $true
-$toggleErrors.Location = New-Object System.Drawing.Point(610, 40)
+$toggleErrors.Location = New-Object System.Drawing.Point(720, 40)
+
+$modelLabel = New-Object System.Windows.Forms.Label
+$modelLabel.Text = "Model:"
+$modelLabel.AutoSize = $true
+$modelLabel.Location = New-Object System.Drawing.Point(12, 66)
+
+$modelCombo = New-Object System.Windows.Forms.ComboBox
+$modelCombo.Width = 200
+$modelCombo.Location = New-Object System.Drawing.Point(60, 62)
+$modelCombo.DropDownStyle = "DropDown"
+$null = $modelCombo.Items.AddRange(@(
+    "qwen3:4b",
+    "qwen3:8b",
+    "llama3.2:3b",
+    "llama3",
+    "qwen2.5:3b"
+))
+
+$setModelButton = New-Object System.Windows.Forms.Button
+$setModelButton.Text = "Set model + restart"
+$setModelButton.AutoSize = $true
+$setModelButton.Location = New-Object System.Drawing.Point(270, 60)
 
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.AutoSize = $true
 $statusLabel.ForeColor = [System.Drawing.Color]::DimGray
-$statusLabel.Location = New-Object System.Drawing.Point(12, 68)
+$statusLabel.Location = New-Object System.Drawing.Point(12, 86)
 
-$textBox = New-Object System.Windows.Forms.TextBox
-$textBox.Multiline = $true
-$textBox.ReadOnly = $true
-$textBox.ScrollBars = "Vertical"
-$textBox.Font = New-Object System.Drawing.Font("Consolas", 10)
-$textBox.Location = New-Object System.Drawing.Point(12, 92)
-$textBox.Size = New-Object System.Drawing.Size(860, 455)
-$textBox.Anchor = "Top,Bottom,Left,Right"
+$tabControl = New-Object System.Windows.Forms.TabControl
+$tabControl.Location = New-Object System.Drawing.Point(12, 92)
+$tabControl.Size = New-Object System.Drawing.Size(860, 430)
+$tabControl.Anchor = "Top,Bottom,Left,Right"
 
-$form.Controls.AddRange(@($pathLabel, $copyButton, $copyErrButton, $pingButton, $restartButton, $toggleErrors, $statusLabel, $textBox))
+$serverTab = New-Object System.Windows.Forms.TabPage
+$serverTab.Text = "Server Log"
+
+$clerkTab = New-Object System.Windows.Forms.TabPage
+$clerkTab.Text = "Clerk Log"
+
+$serverTextBox = New-Object System.Windows.Forms.TextBox
+$serverTextBox.Multiline = $true
+$serverTextBox.ReadOnly = $true
+$serverTextBox.ScrollBars = "Vertical"
+$serverTextBox.Font = New-Object System.Drawing.Font("Consolas", 10)
+$serverTextBox.Dock = "Fill"
+
+$clerkTextBox = New-Object System.Windows.Forms.TextBox
+$clerkTextBox.Multiline = $true
+$clerkTextBox.ReadOnly = $true
+$clerkTextBox.ScrollBars = "Vertical"
+$clerkTextBox.Font = New-Object System.Drawing.Font("Consolas", 10)
+$clerkTextBox.Dock = "Fill"
+
+$serverTab.Controls.Add($serverTextBox)
+$clerkTab.Controls.Add($clerkTextBox)
+$tabControl.TabPages.AddRange(@($serverTab, $clerkTab))
+
+$form.Controls.AddRange(@(
+    $pathLabel,
+    $copyButton,
+    $copyErrButton,
+    $copyClerkButton,
+    $pingButton,
+    $restartButton,
+    $toggleErrors,
+    $modelLabel,
+    $modelCombo,
+    $setModelButton,
+    $statusLabel,
+    $tabControl
+))
 
 $lastWriteTime = [DateTime]::MinValue
+$lastClerkWriteTime = [DateTime]::MinValue
+$modelPath = Join-Path $PSScriptRoot "model_name.txt"
 
 function Get-LogText {
     param($Path, $Tail)
@@ -73,6 +136,27 @@ function Get-LogText {
         return ($content -join [Environment]::NewLine)
     } catch {
         return "Failed to read log: $($_.Exception.Message)"
+    }
+}
+
+function Update-LogBox {
+    param(
+        [string]$Path,
+        [System.Windows.Forms.TextBox]$Box,
+        [ref]$LastWriteRef
+    )
+    if (Test-Path $Path) {
+        $info = Get-Item -Path $Path
+        if ($info.LastWriteTime -ne $LastWriteRef.Value) {
+            $LastWriteRef.Value = $info.LastWriteTime
+            $Box.Text = Get-LogText -Path $Path -Tail $TailLines
+            $Box.SelectionStart = $Box.Text.Length
+            $Box.ScrollToCaret()
+        }
+    } else {
+        if ($Box.Text -notlike "Log file not found*") {
+            $Box.Text = Get-LogText -Path $Path -Tail $TailLines
+        }
     }
 }
 
@@ -110,6 +194,21 @@ function Restart-Server {
     }
 }
 
+function Save-Model {
+    param([string]$ModelName)
+    $clean = ($ModelName | ForEach-Object { $_.Trim() })
+    if (-not $clean) {
+        return "Enter a model name first."
+    }
+    try {
+        Set-Content -Path $modelPath -Value $clean -Encoding ASCII
+        $env:MODEL_NAME = $clean
+        return "Model set to $clean"
+    } catch {
+        return "Model save failed: $($_.Exception.Message)"
+    }
+}
+
 $copyButton.Add_Click({
     if (Test-Path $LogPath) {
         try {
@@ -138,6 +237,20 @@ $copyErrButton.Add_Click({
     }
 })
 
+$copyClerkButton.Add_Click({
+    if (Test-Path $ClerkLogPath) {
+        try {
+            $raw = Get-Content -Path $ClerkLogPath -Raw -ErrorAction Stop
+            Set-Clipboard -Value $raw
+            $statusLabel.Text = "Copied clerk log at $(Get-Date -Format 'HH:mm:ss')."
+        } catch {
+            $statusLabel.Text = "Copy clerk log failed: $($_.Exception.Message)"
+        }
+    } else {
+        $statusLabel.Text = "Clerk log not found."
+    }
+})
+
 $pingButton.Add_Click({
     $results = Ping-Targets -Targets $PingTargets
     $statusLabel.Text = ($results -join " | ")
@@ -147,36 +260,49 @@ $restartButton.Add_Click({
     $statusLabel.Text = Restart-Server
 })
 
+$setModelButton.Add_Click({
+    $saveStatus = Save-Model -ModelName $modelCombo.Text
+    if ($saveStatus -like "Model set*") {
+        $restartStatus = Restart-Server
+        $statusLabel.Text = "$saveStatus; $restartStatus"
+    } else {
+        $statusLabel.Text = $saveStatus
+    }
+})
+
 $toggleErrors.Add_CheckedChanged({
     $source = if ($toggleErrors.Checked) { $ErrLogPath } else { $LogPath }
-    $textBox.Text = Get-LogText -Path $source -Tail $TailLines
-    $textBox.SelectionStart = $textBox.Text.Length
-    $textBox.ScrollToCaret()
+    $serverTextBox.Text = Get-LogText -Path $source -Tail $TailLines
+    $serverTextBox.SelectionStart = $serverTextBox.Text.Length
+    $serverTextBox.ScrollToCaret()
 })
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = $RefreshMs
 $timer.Add_Tick({
     $activePath = if ($toggleErrors.Checked) { $ErrLogPath } else { $LogPath }
-    if (Test-Path $activePath) {
-        $info = Get-Item -Path $activePath
-        if ($info.LastWriteTime -ne $lastWriteTime) {
-            $lastWriteTime = $info.LastWriteTime
-            $textBox.Text = Get-LogText -Path $activePath -Tail $TailLines
-            $textBox.SelectionStart = $textBox.Text.Length
-            $textBox.ScrollToCaret()
-            $statusLabel.Text = "Updated $(Get-Date -Format 'HH:mm:ss')"
-        }
-    } else {
-        if ($textBox.Text -notlike "Log file not found*") {
-            $textBox.Text = Get-LogText -Path $activePath -Tail $TailLines
-            $statusLabel.Text = "Waiting for log..."
-        }
-    }
+    Update-LogBox -Path $activePath -Box $serverTextBox -LastWriteRef ([ref]$lastWriteTime)
+    Update-LogBox -Path $ClerkLogPath -Box $clerkTextBox -LastWriteRef ([ref]$lastClerkWriteTime)
+    $statusLabel.Text = "Updated $(Get-Date -Format 'HH:mm:ss')"
 })
 
 $form.Add_Shown({
-    $textBox.Text = Get-LogText -Path $LogPath -Tail $TailLines
+    if (Test-Path $modelPath) {
+        try {
+            $saved = (Get-Content -Path $modelPath -Raw).Trim()
+            if ($saved) {
+                $modelCombo.Text = $saved
+            }
+        } catch {
+            $null = $null
+        }
+    } elseif ($env:MODEL_NAME) {
+        $modelCombo.Text = $env:MODEL_NAME
+    } else {
+        $modelCombo.Text = "qwen3:4b"
+    }
+    $serverTextBox.Text = Get-LogText -Path $LogPath -Tail $TailLines
+    $clerkTextBox.Text = Get-LogText -Path $ClerkLogPath -Tail $TailLines
     $timer.Start()
 })
 

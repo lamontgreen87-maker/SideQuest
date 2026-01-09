@@ -3,11 +3,12 @@ import json
 import os
 import random
 import re
+import time
 import uuid
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 import logging
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
 
 import httpx
 from eth_account import Account
@@ -40,8 +41,15 @@ logger = logging.getLogger("uvicorn.error")
 
 # --- App Configuration ---
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-MODEL_NAME = os.getenv("MODEL_NAME", "llama3")
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "55"))
+MODEL_NAME = os.getenv("MODEL_NAME", "qwen3:4b")
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "240"))
+FALLBACK_MODEL_NAME = os.getenv("MODEL_FALLBACK", "qwen3:8b")
+CLERK_MODEL_NAME = os.getenv("MODEL_CLERK", "qwen2.5:1.5b")
+CLERK_FALLBACK_MODEL = os.getenv("MODEL_CLERK_FALLBACK", MODEL_NAME)
+CLERK_LOG_PATH = os.getenv(
+    "CLERK_LOG_PATH",
+    os.path.join(os.getenv("LOCALAPPDATA", os.getcwd()), "SideQuest", "clerk.log"),
+)
 API_KEY = os.getenv("API_KEY")
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
 ADMIN_KEY = os.getenv("ADMIN_KEY")
@@ -112,6 +120,50 @@ DEFAULT_SYSTEM_PROMPT = (
     "Respond with final narration only, no preface."
 )
 
+def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]) -> str:
+    safe_state = json.dumps(state, ensure_ascii=True)
+    safe_world = json.dumps(world_state, ensure_ascii=True)
+    world_summary = str(world_state.get("summary") or "").strip()
+    combat_mode = bool(state.get("in_combat"))
+    combat_line = ""
+    if combat_mode:
+        combat_line = (
+            "Combat mode: narrate only the immediate combat outcome of the latest action. "
+            "Do not advance the wider plot or introduce new events.\n"
+        )
+    loot_pending = state.get("loot_pending") or []
+    loot_line = ""
+    if loot_pending:
+        loot_line = (
+            "Loot pending: describe the items listed in game_state.loot_pending. "
+            "Do not invent additional items beyond that list.\n"
+        )
+    return (
+        DEFAULT_SYSTEM_PROMPT
+        + " Use the game state JSON below. If the state changes, reflect it. "
+        + "Always end the player-visible narration with a direct question. "
+        + "End with a separate line: 'NARRATION_HINT: narrate' or "
+        + "'NARRATION_HINT: skip' to signal whether the next action deserves narration.\n"
+        + combat_line
+        + loot_line
+        + ("World summary:\n" + world_summary + "\n" if world_summary else "")
+        + "Game state JSON:\n"
+        + safe_state
+        + "\nWorld state JSON:\n"
+        + safe_world
+    )
+
+def split_narration_hint(text: str) -> Tuple[str, Optional[str]]:
+    hint = None
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("narration_hint:"):
+            hint = stripped.split(":", 1)[1].strip().lower()
+            continue
+        kept.append(line)
+    return ("\n".join(kept).strip(), hint)
+
 if CORS_ORIGINS == "*":
     allow_origins = ["*"]
 else:
@@ -150,10 +202,13 @@ class SendMessageRequest(BaseModel):
 class SendMessageResponse(BaseModel):
     response: str
     session_id: str
+    response_parts: Optional[List[str]] = None
+    game_state: Optional[Dict[str, Any]] = None
 
 class RulesSessionRequest(BaseModel):
     pc_id: str
     enemy_id: str
+    story_session_id: Optional[str] = None
 
 class RulesSessionResponse(BaseModel):
     session_id: str
@@ -183,6 +238,7 @@ class AttackResponse(BaseModel):
     damage_bonus: int
     damage_type: str
     target_hp: int
+    attacker_name: Optional[str] = None
     log: List[str]
     narration: Optional[str] = None
 
@@ -282,6 +338,11 @@ class IntroRequest(BaseModel):
     name: Optional[str] = None
     klass: Optional[str] = None
 
+class IntroSessionRequest(BaseModel):
+    name: Optional[str] = None
+    klass: Optional[str] = None
+    character: Optional[Dict[str, Any]] = None
+
 class IntroResponse(BaseModel):
     intro: str
 
@@ -356,6 +417,9 @@ class PaymentStatusResponse(BaseModel):
 sessions: Dict[str, Dict[str, Any]] = {}
 rules_sessions: Dict[str, RulesSession] = {}
 SESSIONS_STORE_PATH = os.getenv("SESSIONS_STORE_PATH", os.path.join(os.path.dirname(__file__), "sessions_store.json"))
+WORLD_STORE_PATH = os.getenv(
+    "WORLD_STORE_PATH", os.path.join(os.path.dirname(__file__), "world_state_store.json")
+)
 RULES_STORE_PATH = os.getenv("RULES_STORE_PATH", os.path.join(os.path.dirname(__file__), "rules_store.json"))
 CHARACTER_STORE_PATH = os.getenv(
     "CHARACTER_STORE_PATH", os.path.join(os.path.dirname(__file__), "characters_store.json")
@@ -398,6 +462,7 @@ wallet_nonces: Dict[str, Dict[str, Any]] = {}
 payment_orders: Dict[str, Dict[str, Any]] = {}
 payment_state: Dict[str, Any] = {}
 payment_watcher_task: Optional[asyncio.Task] = None
+world_state_store: Dict[str, Dict[str, Any]] = {}
 
 
 def load_rules_sessions() -> None:
@@ -420,11 +485,22 @@ def persist_rules_sessions() -> None:
 def load_sessions() -> Dict[str, Dict[str, Any]]:
     payload = load_simple_store(SESSIONS_STORE_PATH)
     if isinstance(payload, dict):
+        for session in payload.values():
+            ensure_session_state(session)
         return payload
     return {}
 
 def persist_sessions() -> None:
     save_simple_store(SESSIONS_STORE_PATH, sessions)
+
+def load_world_state() -> Dict[str, Dict[str, Any]]:
+    payload = load_simple_store(WORLD_STORE_PATH)
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+def persist_world_state() -> None:
+    save_simple_store(WORLD_STORE_PATH, world_state_store)
 
 def stamp_now() -> str:
     return datetime.utcnow().isoformat()
@@ -514,7 +590,13 @@ def parse_spell_mechanics(spell: Dict[str, Any]) -> Dict[str, Any]:
     attack = "spell attack" in text.lower()
     save = parse_save_ability(text)
     damage = parse_damage_from_text(text)
-    half_on_save = bool(re.search(r"half as much damage", text, re.IGNORECASE))
+    half_on_save = bool(
+        re.search(
+            r"half as much damage|half the damage|half damage|half on a successful",
+            text,
+            re.IGNORECASE,
+        )
+    )
     return {
         "attack": attack,
         "save": save,
@@ -577,6 +659,19 @@ def normalize_spell_payload(spell_id: str, payload: Dict[str, Any]) -> Dict[str,
         "higher_level": payload.get("higher_level"),
         "classes": classes,
     }
+
+def normalize_spell_key(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def resolve_spell_id(spell_key: str) -> Optional[str]:
+    needle = normalize_spell_key(spell_key)
+    if not needle:
+        return None
+    for spell_id, payload in spells_srd.items():
+        name = payload.get("name") or ""
+        if normalize_spell_key(spell_id) == needle or normalize_spell_key(name) == needle:
+            return spell_id
+    return None
 
 def pick_enemy_action(monster: Monster) -> Optional[Dict[str, Any]]:
     actions = [action for action in (monster.actions or []) if action.get("desc")]
@@ -994,7 +1089,117 @@ def get_session_or_404(session_id: str) -> Dict[str, Any]:
     session = sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    ensure_session_state(session)
+    ensure_world_state(session_id)
     return session
+
+def default_game_state() -> Dict[str, Any]:
+    return {
+        "summary": "",
+        "facts": [],
+        "flags": {},
+        "narration_hint": "narrate",
+        "in_combat": False,
+        "inventory": [],
+        "loot_pending": [],
+        "updated_at": stamp_now(),
+    }
+
+def default_world_state() -> Dict[str, Any]:
+    return {
+        "summary": "",
+        "facts": [],
+        "updated_at": stamp_now(),
+    }
+
+def ensure_world_state(session_id: str) -> Dict[str, Any]:
+    existing = world_state_store.get(session_id)
+    if not isinstance(existing, dict):
+        existing = default_world_state()
+        world_state_store[session_id] = existing
+    if "facts" not in existing:
+        existing["facts"] = []
+    if "summary" not in existing:
+        existing["summary"] = ""
+    return existing
+
+def apply_world_updates(world_state: Dict[str, Any], updates: List[str]) -> Dict[str, Any]:
+    if not updates:
+        return world_state
+    updated = dict(world_state)
+    facts = list(updated.get("facts") or [])
+    for entry in updates:
+        clean = str(entry).strip()
+        if clean:
+            facts.append(clean)
+    updated["facts"] = facts[-50:]
+    updated["updated_at"] = stamp_now()
+    return updated
+
+def ensure_session_state(session: Dict[str, Any]) -> None:
+    if "game_state" not in session or not isinstance(session.get("game_state"), dict):
+        session["game_state"] = default_game_state()
+    if "narration_hint" not in session["game_state"]:
+        session["game_state"]["narration_hint"] = "narrate"
+    if "in_combat" not in session["game_state"]:
+        session["game_state"]["in_combat"] = False
+    if "inventory" not in session["game_state"]:
+        session["game_state"]["inventory"] = []
+    if "loot_pending" not in session["game_state"]:
+        session["game_state"]["loot_pending"] = []
+
+def apply_character_to_state(
+    state: Dict[str, Any], name: Optional[str], klass: Optional[str], character: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    updated = dict(state)
+    character_payload = character or {}
+    if not character_payload:
+        character_payload = {}
+        if name:
+            character_payload["name"] = name
+        if klass:
+            character_payload["class"] = klass
+    if character_payload:
+        updated["character"] = character_payload
+        label = character_payload.get("name") or name or "Adventurer"
+        klass_value = character_payload.get("class") or klass or "Hero"
+        updated["summary"] = f"Character created: {label} the {klass_value}."
+        facts = list(updated.get("facts") or [])
+        facts.append(f"{label} is a {klass_value}.")
+        updated["facts"] = facts[-20:]
+    updated["updated_at"] = stamp_now()
+    return updated
+
+def set_story_combat_flag(story_session_id: Optional[str], in_combat: bool) -> None:
+    if not story_session_id:
+        return
+    session = sessions.get(story_session_id)
+    if not session:
+        return
+    ensure_session_state(session)
+    session["game_state"]["in_combat"] = bool(in_combat)
+    session["game_state"]["updated_at"] = stamp_now()
+    persist_sessions()
+
+def sync_combat_state_from_rules(session: RulesSession) -> None:
+    if not session.story_session_id:
+        return
+    active = session.pc.hp > 0 and session.enemy.hp > 0
+    set_story_combat_flag(session.story_session_id, active)
+
+def apply_character_to_world(
+    world_state: Dict[str, Any], name: Optional[str], klass: Optional[str], character: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    updated = dict(world_state)
+    character_payload = character or {}
+    label = character_payload.get("name") or name or "Adventurer"
+    klass_value = character_payload.get("class") or klass or "Hero"
+    facts = list(updated.get("facts") or [])
+    facts.append(f"{label} is a {klass_value}.")
+    updated["facts"] = facts[-50:]
+    updated["summary"] = f"Character in world: {label} the {klass_value}."
+    updated["updated_at"] = stamp_now()
+    return updated
 
 def build_ollama_options(fast: bool) -> Dict[str, Any]:
     base = {
@@ -1007,12 +1212,12 @@ def build_ollama_options(fast: bool) -> Dict[str, Any]:
     if fast:
         return {
             **base,
-            "num_predict": 220,
+            "num_predict": 140,
             "temperature": 0.6,
         }
     return {
         **base,
-        "num_predict": 600,
+        "num_predict": 260,
         "temperature": 0.8,
     }
 
@@ -1066,40 +1271,88 @@ def build_continue_messages(messages: List[Dict[str, str]]) -> List[Dict[str, st
         }
     ]
 
-async def ollama_chat(messages: List[Dict[str, str]], fast: bool) -> str:
-    payload = {
-        "model": MODEL_NAME,
-        "messages": messages,
-        "stream": False,
-        "options": build_ollama_options(fast),
-    }
+def should_retry_with_fallback(response: httpx.Response, model_name: str) -> bool:
+    if not FALLBACK_MODEL_NAME or model_name == FALLBACK_MODEL_NAME:
+        return False
+    status = response.status_code
+    try:
+        body = response.text.lower()
+    except Exception:
+        body = ""
+    if status in (400, 404, 500, 502):
+        if "model" in body or "not found" in body or status in (500, 502):
+            return True
+    return False
+
+async def ollama_chat_with_model(
+    messages: List[Dict[str, str]],
+    fast: bool,
+    model_name: str,
+    fallback_model: Optional[str] = None,
+) -> str:
+    fallback = fallback_model or model_name
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": False,
+            "options": build_ollama_options(fast),
+        }
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+        if should_retry_with_fallback(response, payload["model"]) and fallback != payload["model"]:
+            logger.warning(
+                "Ollama model '%s' failed; falling back to '%s'.",
+                payload["model"],
+                fallback,
+            )
+            payload["model"] = fallback
+            response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
         response.raise_for_status()
         data = response.json()
     return data.get("message", {}).get("content", "")
 
+async def ollama_chat(messages: List[Dict[str, str]], fast: bool) -> str:
+    return await ollama_chat_with_model(
+        messages, fast, MODEL_NAME, fallback_model=FALLBACK_MODEL_NAME
+    )
+
 async def ollama_generate(prompt: str, fast: bool) -> str:
-    payload = {
-        "model": MODEL_NAME,
-        "prompt": prompt,
-        "stream": False,
-        "options": build_ollama_options(fast),
-    }
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
+        payload = {
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "stream": False,
+            "options": build_ollama_options(fast),
+        }
         response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        if should_retry_with_fallback(response, payload["model"]):
+            logger.warning(
+                "Ollama model '%s' failed; falling back to '%s'.",
+                payload["model"],
+                FALLBACK_MODEL_NAME,
+            )
+            payload["model"] = FALLBACK_MODEL_NAME
+            response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
         response.raise_for_status()
         data = response.json()
     return data.get("response", "")
 
 async def ollama_generate_basic(prompt: str) -> str:
-    payload = {
-        "model": MODEL_NAME,
-        "prompt": prompt,
-        "stream": False,
-    }
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
+        payload = {
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "stream": False,
+        }
         response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        if should_retry_with_fallback(response, payload["model"]):
+            logger.warning(
+                "Ollama model '%s' failed; falling back to '%s'.",
+                payload["model"],
+                FALLBACK_MODEL_NAME,
+            )
+            payload["model"] = FALLBACK_MODEL_NAME
+            response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
         response.raise_for_status()
         data = response.json()
     return data.get("response", "")
@@ -1115,6 +1368,10 @@ def get_last_assistant_message(messages: List[Dict[str, str]]) -> str:
         if message.get("role") == "assistant":
             return message.get("content", "")
     return ""
+
+def last_assistant_asked_question(messages: List[Dict[str, str]]) -> bool:
+    last = get_last_assistant_message(messages)
+    return "?" in last if last else False
 
 def without_last_assistant(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     trimmed = messages[:]
@@ -1141,20 +1398,251 @@ def strip_thoughts(text: str) -> str:
     cleaned = text
     for marker in markers:
         cleaned = cleaned.replace(marker, "")
+    cleaned = re.sub(r"\bd&d\b", "the campaign", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bdungeons?\s*&\s*dragons?\b", "the campaign", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?i)you said\s*:\s*\"?[^\n]+\"?", "", cleaned)
+    cleaned = re.sub(r"(?im)^\\s*you said[^\\n]*\\n?", "", cleaned)
+    cleaned = re.sub(r"(?i)you said[^.!?]*[.!?]?", "", cleaned)
+    cleaned = cleaned.strip()
     return cleaned.strip()
 
+def strip_state_leaks(text: str, state: Dict[str, Any], world_state: Dict[str, Any]) -> str:
+    if not text:
+        return text
+    def normalize_line(value: str) -> str:
+        cleaned = value.strip().strip("\"'")
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned.lower().strip()
+
+    facts: List[str] = []
+    for source in (state.get("facts"), world_state.get("facts")):
+        if isinstance(source, list):
+            facts.extend([str(item) for item in source if str(item).strip()])
+    summaries = []
+    for summary in (state.get("summary"), world_state.get("summary")):
+        if isinstance(summary, str) and summary.strip():
+            summaries.append(summary.strip())
+    candidates = facts + summaries
+    fact_set = set()
+    for entry in candidates:
+        for part in re.split(r"[.!?]+", entry):
+            normalized = normalize_line(part)
+            if normalized:
+                fact_set.add(normalized)
+
+    kept: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        normalized = normalize_line(stripped)
+        if normalized in fact_set:
+            continue
+        if re.match(r"^[a-z0-9\\s]+ is a [a-z0-9\\s]+\\.?$", normalized) and len(normalized.split()) <= 6:
+            continue
+        if re.match(r"^\"?.+\"? was cast by .+\\.?$", normalized):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+def log_clerk_event(message: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(CLERK_LOG_PATH), exist_ok=True)
+        with open(CLERK_LOG_PATH, "a", encoding="ascii", errors="ignore") as handle:
+            handle.write(f"[{stamp_now()}] {message}\n")
+    except OSError:
+        logger.info("Clerk: %s", message)
+
+def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    if not text:
+        return None
+    trimmed = text.strip()
+    try:
+        payload = json.loads(trimmed)
+        if isinstance(payload, dict):
+            return payload
+    except ValueError:
+        pass
+    match = re.search(r"\{[\s\S]*\}", trimmed)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(0))
+        if isinstance(payload, dict):
+            return payload
+    except ValueError:
+        return None
+    return None
+
+def build_clerk_messages(
+    state: Dict[str, Any], world_state: Dict[str, Any], user_input: str
+) -> List[Dict[str, str]]:
+    safe_state = json.dumps(state, ensure_ascii=True)
+    safe_world = json.dumps(world_state, ensure_ascii=True)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the game clerk. Update the game state based on the player input. "
+                "Do not narrate. Output only JSON with keys: should_narrate (boolean), "
+                "state (object), story_input (string), player_reply (string), world_updates (array), "
+                "world_summary (string), inventory_add (array), inventory_remove (array), "
+                "action_type (string). "
+                "story_input should be the player's message cleaned to only story actions. "
+                "If should_narrate is false, player_reply should be a brief non-narrative ack. "
+                "action_type should be 'equip' only for equipping items; otherwise use 'narrate'. "
+                "world_updates should list new persistent facts (short sentences) to store. "
+                "world_summary should be a concise 1-3 sentence rolling summary of the story so far. "
+                "inventory_add should list newly discovered loot items to add to inventory. "
+                "inventory_remove should list items that are consumed or removed."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Current state JSON:\n"
+                f"{safe_state}\n\n"
+                "World state JSON:\n"
+                f"{safe_world}\n\n"
+                "Player message:\n"
+                f"{user_input}\n\n"
+                "Return the updated JSON now."
+            ),
+        },
+    ]
+
+def build_filter_messages(state: Dict[str, Any], story_text: str) -> List[Dict[str, str]]:
+    safe_state = json.dumps(state, ensure_ascii=True)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the story clerk. Remove meta, analysis, tool logs, and any "
+                "lines like 'NARRATION_HINT:' from the text. Remove any references "
+                "to D&D or d&d. Remove any 'You said' echoes. Return only clean story text."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Game state JSON:\n"
+                f"{safe_state}\n\n"
+                "Story text:\n"
+                f"{story_text}\n\n"
+                "Return only the clean story text."
+            ),
+        },
+    ]
+
+async def clerk_update_state(
+    state: Dict[str, Any], world_state: Dict[str, Any], user_input: str
+) -> Dict[str, Any]:
+    log_clerk_event("update_state started")
+    messages = build_clerk_messages(state, world_state, user_input)
+    raw = strip_thoughts((await ollama_chat_with_model(
+        messages, fast=True, model_name=CLERK_MODEL_NAME, fallback_model=CLERK_FALLBACK_MODEL
+    )).strip())
+    payload = extract_json_object(raw) or {}
+    next_state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    if not next_state:
+        next_state = state
+    next_state["updated_at"] = stamp_now()
+    world_updates = payload.get("world_updates") if isinstance(payload.get("world_updates"), list) else []
+    action_type = str(payload.get("action_type") or "narrate").strip().lower()
+    world_summary = payload.get("world_summary")
+    world_summary = world_summary.strip() if isinstance(world_summary, str) else ""
+    inventory_add = payload.get("inventory_add") if isinstance(payload.get("inventory_add"), list) else []
+    inventory_remove = payload.get("inventory_remove") if isinstance(payload.get("inventory_remove"), list) else []
+    inventory_add = [str(item).strip() for item in inventory_add if str(item).strip()]
+    inventory_remove = [str(item).strip() for item in inventory_remove if str(item).strip()]
+    inventory = list(next_state.get("inventory") or [])
+    for item in inventory_add:
+        if item not in inventory:
+            inventory.append(item)
+    if inventory_remove:
+        inventory = [item for item in inventory if item not in set(inventory_remove)]
+    next_state["inventory"] = inventory
+    next_state["loot_pending"] = inventory_add
+    result = {
+        "should_narrate": bool(payload.get("should_narrate", True)),
+        "state": next_state,
+        "story_input": payload.get("story_input") or user_input,
+        "player_reply": payload.get("player_reply") or "Noted.",
+        "world_updates": [str(item).strip() for item in world_updates if str(item).strip()],
+        "world_summary": world_summary,
+        "action_type": action_type,
+    }
+    if result["action_type"] != "equip":
+        result["should_narrate"] = True
+    summary = str(result["state"].get("summary", "")).strip()
+    summary = summary[:160] + ("..." if len(summary) > 160 else "")
+    cleaned_input = str(result["story_input"]).strip()
+    cleaned_input = cleaned_input[:200] + ("..." if len(cleaned_input) > 200 else "")
+    log_clerk_event(
+        f"completed should_narrate={result['should_narrate']} "
+        f"action_type={result['action_type']} world_updates={len(result['world_updates'])} "
+        f"story_input=\"{cleaned_input}\" state_summary=\"{summary}\""
+    )
+    return result
+
+async def clerk_filter_story(
+    state: Dict[str, Any], world_state: Dict[str, Any], story_text: str
+) -> str:
+    messages = build_filter_messages(state, story_text)
+    cleaned = strip_thoughts((await ollama_chat_with_model(
+        messages, fast=True, model_name=CLERK_MODEL_NAME, fallback_model=CLERK_FALLBACK_MODEL
+    )).strip())
+    if not cleaned:
+        return story_text
+    cleaned, _ = split_narration_hint(cleaned)
+    if cleaned and not ends_with_sentence(cleaned):
+        continuation_prompt = [
+            {"role": "system", "content": build_story_system_prompt(state, world_state)},
+            {"role": "user", "content": cleaned},
+        ]
+        continuation = await generate_min_response(
+            build_continue_messages(continuation_prompt),
+            True,
+            12,
+        )
+        if continuation:
+            cleaned = (cleaned + " " + continuation).strip()
+    return cleaned
+
+async def generate_intro_story(
+    state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str
+) -> str:
+    identity = ""
+    if name and klass:
+        identity = f"The hero is {name}, a {klass}."
+    elif name:
+        identity = f"The hero is {name}."
+    elif klass:
+        identity = f"The hero is a {klass}."
+    prompt = (
+        "Write an opening scene for a dungeon crawl (2-4 sentences). "
+        "Make it vivid and specific with a clear hook, then end with a direct question. "
+        "Include a hint of danger and wonder. "
+        + identity
+        + " Avoid clichAc tavern starts."
+    ).strip()
+    messages = [
+        {"role": "system", "content": build_story_system_prompt(state, world_state)},
+        {"role": "user", "content": prompt},
+    ]
+    text = await generate_min_response(messages, fast=True, min_words=24)
+    text, hint = split_narration_hint(text)
+    if hint:
+        state["narration_hint"] = hint
+    cleaned = await clerk_filter_story(state, world_state, text)
+    return cleaned or text
+
 def fallback_reply(messages: List[Dict[str, str]]) -> str:
-    user_text = get_last_user_message(messages).strip()
     variations = [
         "A cold draft sweeps the corridor. What do you do next?",
         "Somewhere ahead, a chain rattles. How do you respond?",
         "The air smells of damp stone and old smoke. Your move?",
     ]
-    if user_text:
-        return (
-            "The dungeon grows quiet for a beat. "
-            "You said: \"" + user_text + "\". What do you do next?"
-        )
     return random.choice(variations)
 
 def count_words(text: str) -> int:
@@ -1193,14 +1681,37 @@ async def generate_min_response(messages: List[Dict[str, str]], fast: bool, min_
     return fallback_reply(messages)
 
 async def ollama_stream(messages: List[Dict[str, str]], fast: bool) -> AsyncGenerator[str, None]:
-    payload = {
-        "model": MODEL_NAME,
-        "messages": messages,
-        "stream": True,
-        "options": build_ollama_options(fast),
-    }
     async with httpx.AsyncClient(timeout=None) as client:
+        payload = {
+            "model": MODEL_NAME,
+            "messages": messages,
+            "stream": True,
+            "options": build_ollama_options(fast),
+        }
         async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as response:
+            if should_retry_with_fallback(response, payload["model"]):
+                logger.warning(
+                    "Ollama model '%s' failed; falling back to '%s'.",
+                    payload["model"],
+                    FALLBACK_MODEL_NAME,
+                )
+                payload["model"] = FALLBACK_MODEL_NAME
+                async with client.stream(
+                    "POST",
+                    f"{OLLAMA_URL}/api/chat",
+                    json=payload,
+                ) as fallback_response:
+                    fallback_response.raise_for_status()
+                    async for line in fallback_response.aiter_lines():
+                        if not line:
+                            continue
+                        chunk = json.loads(line)
+                        content = chunk.get("message", {}).get("content")
+                        if content:
+                            yield content
+                        if chunk.get("done"):
+                            break
+                return
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if not line:
@@ -1295,6 +1806,8 @@ async def startup_load_rules():
     load_rules_sessions()
     global sessions
     sessions = load_sessions()
+    global world_state_store
+    world_state_store = load_world_state()
     global custom_characters, custom_bestiary, bestiary_srd, spells_srd
     custom_characters = load_json_store(CHARACTER_STORE_PATH, "characters")
     custom_bestiary = load_json_store(BESTIARY_CUSTOM_PATH, "monsters")
@@ -1553,7 +2066,9 @@ async def create_session(payload: CreateSessionRequest, user: Dict[str, Any] = D
         "last_user_at": None,
         "last_assistant_at": None,
         "last_assistant_message": None,
+        "game_state": default_game_state(),
     }
+    ensure_world_state(session_id)
     persist_sessions()
     return CreateSessionResponse(session_id=session_id)
 
@@ -1573,7 +2088,9 @@ async def import_session(payload: ImportSessionRequest, user: Dict[str, Any] = D
         "last_user_at": None,
         "last_assistant_at": None,
         "last_assistant_message": None,
+        "game_state": default_game_state(),
     }
+    ensure_world_state(session_id)
     persist_sessions()
     return CreateSessionResponse(session_id=session_id)
 
@@ -1590,31 +2107,120 @@ async def send_message(
     session = get_session_or_404(session_id)
     if user.get("credits", 0) <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
-    session["messages"].append({"role": "user", "content": payload.message})
+    ensure_session_state(session)
     session["pending_reply"] = True
     session["last_user_at"] = stamp_now()
     fast = bool(payload.fast)
+    world_state = ensure_world_state(session_id)
     try:
-        response_text = await generate_min_response(session["messages"], fast, 28)
-        last_assistant = get_last_assistant_message(session["messages"])
-        if last_assistant and response_text.strip() == last_assistant.strip():
-            retry_context = build_avoid_repeat_messages(without_last_assistant(session["messages"]))
-            response_text = await generate_min_response(retry_context, fast, 28)
-            if response_text.strip() == last_assistant.strip():
-                response_text = fallback_reply(session["messages"])
+        clerk_result = await clerk_update_state(session["game_state"], world_state, payload.message)
+        session["game_state"] = clerk_result["state"]
+        world_state = apply_world_updates(world_state, clerk_result.get("world_updates") or [])
+        world_summary = str(clerk_result.get("world_summary") or "").strip()
+        if world_summary:
+            world_state["summary"] = world_summary
+            world_state["updated_at"] = stamp_now()
+        world_state_store[session_id] = world_state
+        persist_world_state()
+        story_input = clerk_result["story_input"]
+    except httpx.HTTPError as exc:
+        logger.warning("Clerk model failed: %s", exc)
+        clerk_result = {
+            "should_narrate": True,
+            "player_reply": "Noted.",
+        }
+        story_input = payload.message
+    session["messages"].append({"role": "user", "content": story_input})
+    try:
+        response_parts = None
+        action_type = str(clerk_result.get("action_type") or "").strip().lower()
+        force_narrate = last_assistant_asked_question(session["messages"])
+        should_narrate = action_type != "equip"
+        if action_type != "equip":
+            should_narrate = should_narrate or force_narrate
+        if not should_narrate:
+            response_text = clerk_result.get("player_reply") or "Noted."
+        else:
+            history = [msg for msg in session["messages"] if msg.get("role") != "system"]
+            tail = history[-5:] if history else []
+            model_messages = [
+                {
+                    "role": "system",
+                    "content": build_story_system_prompt(session["game_state"], world_state),
+                },
+                *tail,
+                {"role": "user", "content": story_input},
+            ]
+            response_text = await generate_min_response(model_messages, fast, 28)
+            last_assistant = get_last_assistant_message(session["messages"])
+            if last_assistant and response_text.strip() == last_assistant.strip():
+                retry_context = build_avoid_repeat_messages(without_last_assistant(model_messages))
+                response_text = await generate_min_response(retry_context, fast, 28)
+                if response_text.strip() == last_assistant.strip():
+                    response_text = fallback_reply(model_messages)
+            if response_text and not ends_with_sentence(response_text):
+                continuation = await generate_min_response(
+                    build_continue_messages(model_messages), fast, 14
+                )
+                if continuation:
+                    response_parts = [response_text, continuation]
+            if response_parts:
+                cleaned_parts = []
+                for part in response_parts:
+                    cleaned_part, hint = split_narration_hint(part)
+                    if hint:
+                        session["game_state"]["narration_hint"] = hint
+                    cleaned_part = await clerk_filter_story(
+                        session["game_state"], world_state, cleaned_part
+                    )
+                    cleaned_part = strip_state_leaks(
+                        cleaned_part, session["game_state"], world_state
+                    )
+                    if cleaned_part:
+                        cleaned_parts.append(cleaned_part)
+                if cleaned_parts:
+                    response_parts = cleaned_parts
+                    response_text = cleaned_parts[0]
+                else:
+                    response_parts = None
+            if not response_parts:
+                response_text, hint = split_narration_hint(response_text)
+                if hint:
+                    session["game_state"]["narration_hint"] = hint
+                response_text = await clerk_filter_story(
+                    session["game_state"], world_state, response_text
+                )
+                response_text = strip_state_leaks(
+                    response_text, session["game_state"], world_state
+                )
     except httpx.TimeoutException:
         response_text = fallback_reply(session["messages"])
         logger.warning("Ollama timeout for session %s", session_id)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Ollama error: {exc}") from exc
-    session["messages"].append({"role": "assistant", "content": response_text})
+    response_parts = response_parts if "response_parts" in locals() else None
+    if response_parts:
+        for part in response_parts:
+            cleaned = part.strip()
+            if cleaned:
+                session["messages"].append({"role": "assistant", "content": cleaned})
+        session["last_assistant_message"] = response_parts[-1].strip()
+    else:
+        session["messages"].append({"role": "assistant", "content": response_text})
+        session["last_assistant_message"] = response_text
+    if should_narrate and session["game_state"].get("loot_pending"):
+        session["game_state"]["loot_pending"] = []
     session["pending_reply"] = False
     session["last_assistant_at"] = stamp_now()
-    session["last_assistant_message"] = response_text
     user["credits"] = max(0, int(user.get("credits", 0)) - 1)
     save_simple_store(USERS_STORE_PATH, users_store)
     persist_sessions()
-    return SendMessageResponse(response=response_text, session_id=session_id)
+    return SendMessageResponse(
+        response=response_text,
+        session_id=session_id,
+        response_parts=response_parts,
+        game_state=session.get("game_state"),
+    )
 
 @app.post("/api/sessions/{session_id}/stream", dependencies=[Depends(verify_api_key)])
 async def stream_message(session_id: str, payload: SendMessageRequest, user: Dict[str, Any] = Depends(require_auth)):
@@ -1680,6 +2286,7 @@ async def generate_intro(payload: IntroRequest, user: Dict[str, Any] = Depends(r
         + identity
         + " Avoid cliché tavern starts."
     ).strip()
+    start_time = time.monotonic()
     try:
         text = (await ollama_chat(messages, fast=True)).strip()
         if not text:
@@ -1690,11 +2297,57 @@ async def generate_intro(payload: IntroRequest, user: Dict[str, Any] = Depends(r
         if not text:
             text = (await ollama_generate_basic(prompt)).strip()
         if text:
+            logger.info("Intro generation completed in %.2fs", time.monotonic() - start_time)
             return IntroResponse(intro=text)
-        logger.warning("Intro generation returned empty response.")
+        logger.warning(
+            "Intro generation returned empty response after %.2fs",
+            time.monotonic() - start_time,
+        )
     except httpx.HTTPError as exc:
-        logger.warning("Intro generation failed: %s", exc)
+        logger.warning(
+            "Intro generation failed after %.2fs: %s",
+            time.monotonic() - start_time,
+            exc,
+        )
     return IntroResponse(intro="A distant bell tolls in the dark. What do you do?")
+
+@app.post(
+    "/api/sessions/{session_id}/intro",
+    response_model=IntroResponse,
+    dependencies=[Depends(verify_api_key)],
+)
+async def generate_session_intro(
+    session_id: str,
+    payload: IntroSessionRequest,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    session = get_session_or_404(session_id)
+    ensure_session_state(session)
+    log_clerk_event(f"intro_request received session_id={session_id}")
+    world_state = ensure_world_state(session_id)
+    name = (payload.name or "").strip()
+    klass = (payload.klass or "").strip()
+    log_clerk_event("intro_request applying character to game/world state")
+    session["game_state"] = apply_character_to_state(
+        session["game_state"], name, klass, payload.character
+    )
+    world_state = apply_character_to_world(world_state, name, klass, payload.character)
+    world_state_store[session_id] = world_state
+    persist_world_state()
+    try:
+        log_clerk_event("intro_request generating story")
+        intro = await generate_intro_story(session["game_state"], world_state, name, klass)
+        if not intro:
+            intro = "A distant bell tolls in the dark. What do you do?"
+        session["messages"].append({"role": "assistant", "content": intro})
+        session["last_assistant_at"] = stamp_now()
+        session["last_assistant_message"] = intro
+        session["pending_reply"] = False
+        persist_sessions()
+        return IntroResponse(intro=intro)
+    except httpx.HTTPError as exc:
+        logger.warning("Session intro generation failed: %s", exc)
+        return IntroResponse(intro="A distant bell tolls in the dark. What do you do?")
 
 # --- Rules Engine (5e SRD, strict) ---
 @app.get("/api/rules/premades")
@@ -1859,8 +2512,10 @@ async def create_rules_session(payload: RulesSessionRequest):
         pc=pc,
         enemy=enemy,
         round=1,
+        story_session_id=payload.story_session_id,
         log=[f"Combat starts: {pc.name} vs {enemy.name}."],
     )
+    set_story_combat_flag(payload.story_session_id, True)
     persist_rules_sessions()
     return RulesSessionResponse(
         session_id=session_id,
@@ -1919,6 +2574,7 @@ async def player_attack(session_id: str, payload: AttackRequest, narrate: bool =
         except httpx.HTTPError:
             narration = None
     persist_rules_sessions()
+    sync_combat_state_from_rules(session)
     return AttackResponse(
         attacker="pc",
         target="enemy",
@@ -1931,6 +2587,7 @@ async def player_attack(session_id: str, payload: AttackRequest, narrate: bool =
         damage_bonus=damage_bonus,
         damage_type=weapon.damage_type,
         target_hp=session.enemy.hp,
+        attacker_name=session.pc.name,
         log=list(session.log),
         narration=narration,
     )
@@ -2017,6 +2674,7 @@ async def enemy_attack(session_id: str, narrate: bool = Query(False)):
         except httpx.HTTPError:
             narration = None
     persist_rules_sessions()
+    sync_combat_state_from_rules(session)
     return AttackResponse(
         attacker="enemy",
         target="pc",
@@ -2029,6 +2687,7 @@ async def enemy_attack(session_id: str, narrate: bool = Query(False)):
         damage_bonus=damage_bonus,
         damage_type=damage_type,
         target_hp=session.pc.hp,
+        attacker_name=session.enemy.name,
         log=list(session.log),
         narration=narration,
     )
@@ -2095,20 +2754,34 @@ async def cast_spell(session_id: str, payload: SpellCastRequest, narrate: bool =
     if session.pc.hp <= 0 or session.enemy.hp <= 0:
         raise HTTPException(status_code=400, detail="Combat is already over")
 
-    spell = spells_srd.get(payload.spell_id)
+    requested_spell = payload.spell_id
+    spell_id = requested_spell
+    spell = spells_srd.get(spell_id)
+    if not spell:
+        spell_id = resolve_spell_id(requested_spell or "")
+        spell = spells_srd.get(spell_id or "")
     if not spell:
         raise HTTPException(status_code=400, detail="Unknown spell")
     allowed_ids = set(session.pc.cantrips_known)
     allowed_ids.update(session.pc.known_spells)
     allowed_ids.update(session.pc.prepared_spells)
-    if allowed_ids and payload.spell_id not in allowed_ids:
-        raise HTTPException(status_code=400, detail="Spell not available to character")
+    if allowed_ids:
+        allowed_norm = {normalize_spell_key(entry) for entry in allowed_ids}
+        request_norm = normalize_spell_key(requested_spell)
+        spell_id_norm = normalize_spell_key(spell_id)
+        spell_name_norm = normalize_spell_key(spell.get("name") or "")
+        if not (
+            request_norm in allowed_norm
+            or spell_id_norm in allowed_norm
+            or spell_name_norm in allowed_norm
+        ):
+            raise HTTPException(status_code=400, detail="Spell not available to character")
 
     mechanics = parse_spell_mechanics(spell)
     ability_key = get_spellcasting_ability(session.pc)
     ability_bonus = ability_mod(session.pc.stats.get(ability_key, 10))
     dc = 8 + session.pc.prof_bonus + ability_bonus
-    name = spell.get("name", payload.spell_id)
+    name = spell.get("name", spell_id)
 
     attack_total: Optional[int] = None
     attack_rolls: Optional[List[int]] = None
@@ -2153,9 +2826,18 @@ async def cast_spell(session_id: str, payload: SpellCastRequest, narrate: bool =
             f"{'fail' if hit else 'success'}."
         )
     else:
-        session.log.append(f"{session.pc.name} casts {name}.")
+        if mechanics.get("damage"):
+            damage_total, damage_rolls, damage_bonus = roll_dice(mechanics["damage"])
+            hit = True
+            outcome = "hit"
+            session.log.append(f"{session.pc.name} casts {name}.")
+        else:
+            session.log.append(f"{session.pc.name} casts {name}.")
 
-    if hit and damage_total:
+    apply_damage = bool(damage_total)
+    if mechanics.get("save") and hit is False and not mechanics.get("half_on_save"):
+        apply_damage = False
+    if apply_damage:
         session.enemy.hp = max(0, session.enemy.hp - damage_total)
         session.log.append(
             f"Deals {damage_total} {damage_type or 'magic'} damage. "
@@ -2171,8 +2853,9 @@ async def cast_spell(session_id: str, payload: SpellCastRequest, narrate: bool =
         except httpx.HTTPError:
             narration = None
     persist_rules_sessions()
+    sync_combat_state_from_rules(session)
     return SpellCastResponse(
-        spell_id=payload.spell_id,
+        spell_id=spell_id,
         name=name,
         outcome=outcome,
         dc=dc if mechanics.get("save") else None,

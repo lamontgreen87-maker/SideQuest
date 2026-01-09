@@ -17,10 +17,15 @@ export default function Button({
     disabled && styles.disabled,
     style,
   ];
+  const labelStyle = [
+    styles.label,
+    variant === "ghost" && styles.labelGhost,
+    variant === "danger" && styles.labelDanger,
+  ];
 
   return (
     <Pressable onPress={onPress} disabled={disabled} style={containerStyle}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={labelStyle}>{label}</Text>
     </Pressable>
   );
 }
@@ -37,9 +42,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.gold,
   },
   ghost: {
-    backgroundColor: "transparent",
+    backgroundColor: colors.panelAlt,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.mutedGold,
   },
   danger: {
     backgroundColor: colors.accent,
@@ -53,5 +58,11 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: "uppercase",
     fontSize: 12,
+  },
+  labelGhost: {
+    color: colors.parchment,
+  },
+  labelDanger: {
+    color: colors.ink,
   },
 });

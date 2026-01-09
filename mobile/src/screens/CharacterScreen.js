@@ -149,6 +149,7 @@ export default function CharacterScreen({
   const [formSkillProficiencies, setFormSkillProficiencies] = useState([]);
   const [selectedWeapons, setSelectedWeapons] = useState([WEAPONS[0].id]);
   const [spellCatalog, setSpellCatalog] = useState([]);
+  const [formError, setFormError] = useState("");
 
   const loadSpells = useCallback(async () => {
     try {
@@ -211,6 +212,7 @@ export default function CharacterScreen({
   const toggleWeapon = useCallback(
     (id) => {
       if (!availableWeaponIds.includes(id)) return;
+      setFormError("");
       setSelectedWeapons((prev) => {
         if (prev.includes(id)) {
           return prev.filter((weaponId) => weaponId !== id);
@@ -298,7 +300,10 @@ export default function CharacterScreen({
 
   const handleCreateCharacter = useCallback(async () => {
     if (createBusy) return;
-    if (!selectedWeaponData.length) return;
+    if (!selectedWeaponData.length) {
+      setFormError("Choose at least one weapon before creating your character.");
+      return;
+    }
     setCreateBusy(true);
     try {
       const statsPayload = Object.keys(formStats).reduce((acc, key) => {
@@ -359,10 +364,30 @@ export default function CharacterScreen({
       setFormSaveProficiencies([]);
       setFormSkillProficiencies([]);
       setSelectedWeapons([WEAPONS[0].id]);
+      setFormError("");
       onCharacterCreated?.({
+        id: response?.character_id || null,
         name: resolvedName,
         klass: formClass,
         level: levelValue,
+        stats: statsPayload,
+        armor_class: Number(formArmorClass) || 10,
+        max_hp: Number(formMaxHp) || 10,
+        weapons: weaponsPayload,
+        race: formRace,
+        background: formBackground,
+        alignment: formAlignment,
+        traits: parseList(formTraits),
+        languages: parseList(formLanguages),
+        items: parseList(formItems),
+        spellcasting_ability: formSpellcastingAbility,
+        cantrips_known: selectedCantrips,
+        spellbook: selectedSpells,
+        prepared_spells: [],
+        known_spells: selectedSpells,
+        save_proficiencies: formSaveProficiencies,
+        skill_proficiencies: formSkillProficiencies,
+        conditions: [],
       });
     } catch (error) {
       console.error("Failed to create character", error);
@@ -503,6 +528,7 @@ export default function CharacterScreen({
             })}
           </View>
           <Text style={[styles.statLabelSmall, styles.sectionLabel]}>Weapons</Text>
+          {formError ? <Text style={styles.formError}>{formError}</Text> : null}
           <View style={styles.weaponRow}>
             {availableWeapons.map((weapon) => {
               const isActive = selectedWeapons.includes(weapon.id);
@@ -866,7 +892,13 @@ const styles = StyleSheet.create({
     color: colors.mutedGold,
     letterSpacing: 1,
     textTransform: "uppercase",
-  },  weaponRow: {
+  },
+  formError: {
+    color: colors.accent,
+    fontSize: 12,
+    marginBottom: spacing.sm,
+  },
+  weaponRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.sm,

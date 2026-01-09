@@ -38,6 +38,7 @@ export const STORAGE_KEYS = {
   serverUrl: "dc_server_url",
   sessions: "dc_sessions",
   lastSession: "dc_last_session",
+  lastCharacter: "dc_last_character",
   fastMode: "dc_fast_mode",
   rulesSession: "dc_rules_session",
   authToken: "dc_auth_token",

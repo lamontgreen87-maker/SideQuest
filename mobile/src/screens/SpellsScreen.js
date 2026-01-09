@@ -13,22 +13,37 @@ function formatList(value) {
 }
 
 
-export default function SpellsScreen({ serverUrl }) {
+function normalizeSpellClasses(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+export default function SpellsScreen({ serverUrl, characterClass }) {
   const [spells, setSpells] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
 
   const loadSpells = useCallback(async () => {
     try {
       const data = await apiGet(serverUrl, "/api/rules/spells");
-      const fallback =
-        data ||
-        DEFAULT_SPELLS.reduce((acc, entry) => {
-          acc[entry.id] = entry;
-          return acc;
-        }, {});
-      const list = Object.entries(fallback).map(([id, payload]) => ({
+      const fallbackSource =
+        data && Object.keys(data).length
+          ? data
+          : DEFAULT_SPELLS.reduce((acc, entry) => {
+              acc[entry.id] = entry;
+              return acc;
+            }, {});
+      const list = Object.entries(fallbackSource).map(([id, payload]) => ({
         id,
         ...payload,
+        classes: normalizeSpellClasses(payload.classes),
       }));
       list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
       setSpells(list);
@@ -40,13 +55,36 @@ export default function SpellsScreen({ serverUrl }) {
     }
   }, [serverUrl, selectedId]);
 
+  const classFiltered = useMemo(() => {
+    if (!characterClass) return spells;
+    const target = String(characterClass).toLowerCase().trim();
+    if (!target) return spells;
+    const matches = spells.filter((spell) =>
+      spell.classes?.some((cls) => {
+        const normalized = String(cls).toLowerCase().trim();
+        return normalized === target || normalized.includes(target) || target.includes(normalized);
+      })
+    );
+    return matches.length ? matches : spells;
+  }, [spells, characterClass]);
+
+  useEffect(() => {
+    if (!classFiltered.length) {
+      setSelectedId(null);
+      return;
+    }
+    if (!selectedId || !classFiltered.some((spell) => spell.id === selectedId)) {
+      setSelectedId(classFiltered[0].id);
+    }
+  }, [classFiltered, selectedId]);
+
   useEffect(() => {
     loadSpells();
   }, [loadSpells]);
 
   const selected = useMemo(
-    () => spells.find((spell) => spell.id === selectedId),
-    [spells, selectedId]
+    () => classFiltered.find((spell) => spell.id === selectedId),
+    [classFiltered, selectedId]
   );
 
   return (
@@ -54,7 +92,7 @@ export default function SpellsScreen({ serverUrl }) {
       <Section title="Spells">
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.row}>
-            {spells.map((spell) => (
+            {classFiltered.map((spell) => (
               <Text
                 key={spell.id}
                 style={[styles.pill, spell.id === selectedId && styles.pillActive]}
@@ -111,7 +149,11 @@ export default function SpellsScreen({ serverUrl }) {
             ) : null}
           </View>
         ) : (
-          <Text style={styles.muted}>No spell selected.</Text>
+          <Text style={styles.muted}>
+            {characterClass
+              ? `No spells available for ${characterClass}.`
+              : "No spell selected."}
+          </Text>
         )}
         <Button label="Refresh" onPress={loadSpells} variant="ghost" />
       </Section>

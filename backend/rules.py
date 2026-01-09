@@ -69,6 +69,7 @@ class RulesSession:
     pc: Character
     enemy: Monster
     round: int
+    story_session_id: Optional[str] = None
     log: List[str] = field(default_factory=list)
     story: List[str] = field(default_factory=list)
 
@@ -140,6 +141,7 @@ def serialize_rules_session(session: RulesSession) -> Dict[str, object]:
         "pc": serialize_character(session.pc),
         "enemy": serialize_monster(session.enemy),
         "round": session.round,
+        "story_session_id": session.story_session_id,
         "log": list(session.log),
         "story": list(session.story),
     }
@@ -208,6 +210,7 @@ def deserialize_rules_session(data: Dict[str, object]) -> RulesSession:
         pc=pc,
         enemy=enemy,
         round=int(data["round"]),
+        story_session_id=data.get("story_session_id"),
         log=list(data.get("log", [])),
         story=list(data.get("story", [])),
     )

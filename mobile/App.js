@@ -35,7 +35,7 @@ import {
   WALLETCONNECT_PROJECT_ID,
   WALLETCONNECT_SESSION_PARAMS,
 } from "./src/config";
-import { getItem, getJson, removeItem, setItem } from "./src/storage";
+import { getItem, getJson, removeItem, setItem, setJson } from "./src/storage";
 import { colors, radius, spacing } from "./src/theme";
 
 if (typeof BackHandler.removeEventListener !== "function") {
@@ -133,6 +133,10 @@ export default function App() {
   const loadStoredState = useCallback(async () => {
     let initialServerUrl = await getItem(STORAGE_KEYS.serverUrl, DEFAULT_SERVER_URL);
     setServerUrl(initialServerUrl);
+    const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
+    if (storedCharacter) {
+      setCurrentCharacter(storedCharacter);
+    }
 
     let serverIsHealthy = true;
     try {
@@ -331,11 +335,16 @@ export default function App() {
   const closeCharacterCreator = useCallback(() => setCreationVisible(false), []);
   const [pendingCharacterEntry, setPendingCharacterEntry] = useState(null);
   const [pendingSessionEntry, setPendingSessionEntry] = useState(null);
+  const [resetSessionToken, setResetSessionToken] = useState(0);
+  const [currentCharacter, setCurrentCharacter] = useState(null);
   const handleCharacterCreated = useCallback(
     (character) => {
       closeCharacterCreator();
       setActiveTab("story");
       setPendingCharacterEntry({ ...character, timestamp: Date.now() });
+      setResetSessionToken(Date.now());
+      setCurrentCharacter(character);
+      setJson(STORAGE_KEYS.lastCharacter, character);
     },
     [closeCharacterCreator, setActiveTab]
   );
@@ -381,26 +390,53 @@ export default function App() {
     ],
     [openSessions, openCharacterCreator]
   );
-  const activeContent = useMemo(() => {
-    switch (activeTab) {
-      case "story":
-      return (
-        <StoryScreen
-          serverUrl={serverUrl}
-          onCreditsUpdate={setCredits}
-          onNavigate={setActiveTab}
-          characterEntry={pendingCharacterEntry}
-          onCharacterEntryHandled={handleStoryEntryConsumed}
-          sessionEntry={pendingSessionEntry}
-          onSessionEntryHandled={handleSessionEntryConsumed}
-        />
-      );
-      case "spells":
-        return <SpellsScreen serverUrl={serverUrl} />;
-      case "bestiary":
-        return <BestiaryScreen serverUrl={serverUrl} />;
-      case "settings":
-        return (
+  const activeContent = useMemo(
+    () => (
+      <View style={appStyles.tabContainer}>
+        <View
+          style={[
+            appStyles.tabPane,
+            activeTab === "story" ? appStyles.tabPaneActive : appStyles.tabPaneHidden,
+          ]}
+          pointerEvents={activeTab === "story" ? "auto" : "none"}
+        >
+          <StoryScreen
+            serverUrl={serverUrl}
+            onCreditsUpdate={setCredits}
+            onNavigate={setActiveTab}
+            characterEntry={pendingCharacterEntry}
+            onCharacterEntryHandled={handleStoryEntryConsumed}
+            sessionEntry={pendingSessionEntry}
+            onSessionEntryHandled={handleSessionEntryConsumed}
+            resetSessionToken={resetSessionToken}
+            currentCharacter={currentCharacter}
+          />
+        </View>
+        <View
+          style={[
+            appStyles.tabPane,
+            activeTab === "spells" ? appStyles.tabPaneActive : appStyles.tabPaneHidden,
+          ]}
+          pointerEvents={activeTab === "spells" ? "auto" : "none"}
+        >
+          <SpellsScreen serverUrl={serverUrl} characterClass={currentCharacter?.klass} />
+        </View>
+        <View
+          style={[
+            appStyles.tabPane,
+            activeTab === "bestiary" ? appStyles.tabPaneActive : appStyles.tabPaneHidden,
+          ]}
+          pointerEvents={activeTab === "bestiary" ? "auto" : "none"}
+        >
+          <BestiaryScreen serverUrl={serverUrl} />
+        </View>
+        <View
+          style={[
+            appStyles.tabPane,
+            activeTab === "settings" ? appStyles.tabPaneActive : appStyles.tabPaneHidden,
+          ]}
+          pointerEvents={activeTab === "settings" ? "auto" : "none"}
+        >
           <SettingsScreen
             serverUrl={serverUrl}
             setServerUrl={setServerUrl}
@@ -412,26 +448,26 @@ export default function App() {
             onSignOut={disconnectWallet}
             credits={credits}
           />
-        );
-      default:
-        return null;
-    }
-  }, [
-    activeTab,
-    serverUrl,
-    setCredits,
-    pendingCharacterEntry,
-    handleStoryEntryConsumed,
-    pendingSessionEntry,
-    handleSessionEntryConsumed,
-    handleCharacterCreated,
-    saveServerUrl,
-    refreshServerUrl,
-    applyServerUrl,
-    updateStatus,
-    disconnectWallet,
-    credits,
-  ]);
+        </View>
+      </View>
+    ),
+    [
+      activeTab,
+      serverUrl,
+      setCredits,
+      pendingCharacterEntry,
+      handleStoryEntryConsumed,
+      pendingSessionEntry,
+      handleSessionEntryConsumed,
+      resetSessionToken,
+      saveServerUrl,
+      refreshServerUrl,
+      applyServerUrl,
+      updateStatus,
+      disconnectWallet,
+      credits,
+    ]
+  );
 
   if (!fontsLoaded) {
     return (
@@ -643,5 +679,24 @@ const modalStyles = StyleSheet.create({
     color: colors.mutedGold,
     fontSize: 12,
     padding: spacing.lg,
+  },
+});
+
+const appStyles = StyleSheet.create({
+  tabContainer: {
+    flex: 1,
+  },
+  tabPane: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  tabPaneActive: {
+    opacity: 1,
+  },
+  tabPaneHidden: {
+    opacity: 0,
   },
 });
