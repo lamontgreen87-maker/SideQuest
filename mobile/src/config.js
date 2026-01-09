@@ -12,6 +12,7 @@ export const GITHUB_RELEASES_PAGE =
   "https://github.com/lamontgreen87-maker/SideQuest/releases/latest";
 
 export const WALLETCONNECT_PROJECT_ID = "7fb717fa1a1cc0f849a70d99c6837f0a";
+export const WALLETCONNECT_RELAY_URL = "wss://relay.walletconnect.org";
 export const WALLETCONNECT_METADATA = {
   name: "Side Quest",
   description: "Side Quest wallet login",

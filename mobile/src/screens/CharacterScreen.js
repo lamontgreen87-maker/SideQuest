@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -129,6 +129,7 @@ export default function CharacterScreen({
   scrollEnabled = true,
 }) {
   const [createBusy, setCreateBusy] = useState(false);
+  const createInFlightRef = useRef(false);
 
   const [formName, setFormName] = useState("");
   const [formLevel, setFormLevel] = useState("1");
@@ -299,11 +300,12 @@ export default function CharacterScreen({
   );
 
   const handleCreateCharacter = useCallback(async () => {
-    if (createBusy) return;
+    if (createBusy || createInFlightRef.current) return;
     if (!selectedWeaponData.length) {
       setFormError("Choose at least one weapon before creating your character.");
       return;
     }
+    createInFlightRef.current = true;
     setCreateBusy(true);
     try {
       const statsPayload = Object.keys(formStats).reduce((acc, key) => {
@@ -366,6 +368,7 @@ export default function CharacterScreen({
       setSelectedWeapons([WEAPONS[0].id]);
       setFormError("");
       onCharacterCreated?.({
+        requestId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         id: response?.character_id || null,
         name: resolvedName,
         klass: formClass,
@@ -392,6 +395,7 @@ export default function CharacterScreen({
     } catch (error) {
       console.error("Failed to create character", error);
     } finally {
+      createInFlightRef.current = false;
       setCreateBusy(false);
     }
   }, [

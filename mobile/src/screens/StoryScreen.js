@@ -22,6 +22,7 @@ import { DEFAULT_ENEMIES, DEFAULT_PREMADES, DEFAULT_SPELLS } from "../data/dnd";
 const storyCache = {
   messages: [],
   sessionId: null,
+  introKey: null,
 };
 
 const DRAWER_COLLAPSED_HEIGHT = 48;
@@ -124,7 +125,7 @@ function sanitizeIntro(text) {
   if (!text) return null;
   const trimmed = text.trim();
   if (!trimmed) return null;
-  if (trimmed.length < 80) return null;
+  if (trimmed.length < 30) return null;
   if (looksLikePrompt(trimmed)) return null;
   return trimmed;
 }
@@ -150,6 +151,9 @@ export default function StoryScreen({
 }) {
   const messageSeq = useRef(0);
   const introRequestRef = useRef({ key: null, inFlight: false });
+  const sessionRequestRef = useRef(null);
+  const suppressColdStartRef = useRef(false);
+  const sessionInvalidRef = useRef(false);
   const makeId = useCallback(
     () => `${Date.now()}-${messageSeq.current++}`,
     []
@@ -336,15 +340,26 @@ export default function StoryScreen({
   );
 
   const ensureSession = useCallback(async () => {
-    if (sessionId) {
+    if (sessionId && !sessionInvalidRef.current) {
       return sessionId;
     }
-    const response = await apiPost(serverUrl, "/api/sessions", {
+    if (sessionRequestRef.current) {
+      return sessionRequestRef.current;
+    }
+    const request = apiPost(serverUrl, "/api/sessions", {
       messages: messages.length ? messages : undefined,
-    });
-    setSessionId(response.session_id);
-    await setJson(STORAGE_KEYS.lastSession, response.session_id);
-    return response.session_id;
+    })
+      .then(async (response) => {
+        setSessionId(response.session_id);
+        sessionInvalidRef.current = false;
+        await setJson(STORAGE_KEYS.lastSession, response.session_id);
+        return response.session_id;
+      })
+      .finally(() => {
+        sessionRequestRef.current = null;
+      });
+    sessionRequestRef.current = request;
+    return request;
   }, [messages, serverUrl, sessionId]);
 
   const fetchAiIntro = useCallback(
@@ -375,8 +390,9 @@ export default function StoryScreen({
         };
         const response = await Promise.race([
           apiPost(serverUrl, `/api/sessions/${id}/intro`, payload),
-          new Promise((resolve) => setTimeout(() => resolve(null), 15000)),
+          new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
         ]);
+        if (!response) return null;
         return response?.intro ? sanitizeIntro(response.intro) : null;
       } catch (error) {
         return null;
@@ -432,7 +448,7 @@ export default function StoryScreen({
   );
 
   const loadSession = useCallback(async () => {
-    if (characterEntry) {
+    if (characterEntry || suppressColdStartRef.current) {
       return;
     }
     if (messages.length) {
@@ -440,10 +456,17 @@ export default function StoryScreen({
       return;
     }
     const introKey = "cold-start";
-    if (introRequestRef.current.inFlight && introRequestRef.current.key === introKey) {
+    if (storyCache.introKey === introKey) {
+      return;
+    }
+    if (introRequestRef.current.inFlight) {
+      return;
+    }
+    if (introRequestRef.current.key === introKey) {
       return;
     }
     introRequestRef.current = { key: introKey, inFlight: true };
+    storyCache.introKey = introKey;
     const storedId = await getJson(STORAGE_KEYS.lastSession, null);
     if (storedId) {
       setSessionId(storedId);
@@ -475,6 +498,12 @@ export default function StoryScreen({
       setRulesSeeded(true);
     }
   }, [messages, rulesSeeded]);
+
+  useEffect(() => {
+    if (characterEntry) {
+      suppressColdStartRef.current = false;
+    }
+  }, [characterEntry]);
 
   useEffect(() => {
     if (!adventureLoading && !loading) return;
@@ -806,6 +835,9 @@ export default function StoryScreen({
 
   useEffect(() => {
     if (!resetSessionToken) return;
+    suppressColdStartRef.current = true;
+    sessionInvalidRef.current = true;
+    sessionRequestRef.current = null;
     setSessionId(null);
     setMessages([]);
     setRulesSeeded(false);
@@ -814,8 +846,10 @@ export default function StoryScreen({
     setCheckResult(null);
     setCheckUsed(false);
     setDrawerExpanded(false);
+    introRequestRef.current = { key: null, inFlight: false };
     storyCache.messages = [];
     storyCache.sessionId = null;
+    storyCache.introKey = null;
     removeItem(STORAGE_KEYS.lastSession);
   }, [resetSessionToken]);
 
@@ -864,43 +898,58 @@ export default function StoryScreen({
 
   useEffect(() => {
     if (!characterEntry) return;
+    if (introRequestRef.current.inFlight) {
+      return;
+    }
     const name = characterEntry.name || "Adventurer";
     const klass = characterEntry.klass || "Hero";
-    const introKey = `${name}|${klass}`;
-    if (introRequestRef.current.inFlight && introRequestRef.current.key === introKey) {
+    const introKey = characterEntry.requestId || `${name}|${klass}`;
+    if (storyCache.introKey === introKey) {
+      return;
+    }
+    if (introRequestRef.current.key === introKey) {
       return;
     }
     introRequestRef.current = { key: introKey, inFlight: true };
+    storyCache.introKey = introKey;
     setAdventureLoading(true);
     let isActive = true;
-    ensureSession()
-      .then(async (id) => {
-        const sessionIntro = await fetchSessionIntro(id, characterEntry);
-        if (sessionIntro) return sessionIntro;
-        return getIntro(name, klass);
-      })
-      .then((intro) => {
+    const runIntro = async () => {
+      const localIntro = pickFallbackIntro() || pickIntro();
+      if (!isActive) return;
+      setTimeout(() => {
         if (!isActive) return;
-        setTimeout(() => {
-          setMessages((prev) => [
-            ...prev,
-            makeMessage("assistant", intro),
-          ]);
-          setAdventureLoading(false);
-          introRequestRef.current = { key: introKey, inFlight: false };
-          onCharacterEntryHandled?.();
-        }, 900);
-      });
+        setMessages((prev) => [...prev, makeMessage("assistant", localIntro)]);
+        setAdventureLoading(false);
+        onCharacterEntryHandled?.();
+      }, 300);
+
+      let serverIntro = null;
+      try {
+        const id = await ensureSession();
+        serverIntro = await fetchSessionIntro(id, characterEntry);
+      } catch (error) {
+        serverIntro = null;
+      }
+      if (!isActive) return;
+      if (serverIntro && serverIntro !== localIntro) {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && last?.content === localIntro) {
+            return [...prev.slice(0, -1), makeMessage("assistant", serverIntro)];
+          }
+          return [...prev, makeMessage("assistant", serverIntro)];
+        });
+      }
+      introRequestRef.current = { key: introKey, inFlight: false };
+    };
+    runIntro();
     return () => {
       isActive = false;
-      if (introRequestRef.current.key === introKey) {
-        introRequestRef.current = { key: introKey, inFlight: false };
-      }
     };
   }, [
     characterEntry,
     onCharacterEntryHandled,
-    getIntro,
     makeMessage,
     ensureSession,
     fetchSessionIntro,

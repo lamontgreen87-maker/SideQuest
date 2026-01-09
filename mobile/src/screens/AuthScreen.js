@@ -62,7 +62,7 @@ export default function AuthScreen({
             <Button
               label={walletConnected ? "Wallet Connected" : "Connect Wallet"}
               onPress={onOpenWallet}
-              disabled={walletConnected}
+              disabled={false}
             />
             <Button label="Disconnect" onPress={onDisconnect} variant="ghost" />
             {onResetWallet ? (

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BackHandler,
   Alert,
@@ -11,7 +11,7 @@ import {
   Text,
   View,
 } from "react-native";
-import * as NavigationBar from "expo-navigation-bar";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from "@expo-google-fonts/cinzel";
 import { WalletConnectModal, useWalletConnectModal } from "@walletconnect/modal-react-native";
 import AuthScreen from "./src/screens/AuthScreen";
@@ -35,6 +35,7 @@ import {
   STORAGE_KEYS,
   WALLETCONNECT_METADATA,
   WALLETCONNECT_PROJECT_ID,
+  WALLETCONNECT_RELAY_URL,
   WALLETCONNECT_SESSION_PARAMS,
 } from "./src/config";
 import { getItem, getJson, removeItem, setItem, setJson } from "./src/storage";
@@ -78,6 +79,9 @@ const STORY_BODY_STYLE = {
   flex: 1,
 };
 
+const WALLETCONNECT_STORAGE_KEY = "dc_walletconnect_storage_cleaned";
+const WALLETCONNECT_KEY_MARKERS = ["wc@", "walletconnect", "WALLETCONNECT", "w3m", "W3M"];
+
 export default function App() {
   const [fontsLoaded] = useFonts({
     Cinzel_400Regular,
@@ -97,6 +101,8 @@ export default function App() {
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [authStatus, setAuthStatus] = useState({ loading: false, error: null });
   const [walletStatus, setWalletStatus] = useState({});
+  const [walletReady, setWalletReady] = useState(false);
+  const lastCharacterRequestRef = useRef(null);
   const [updateStatus, setUpdateStatus] = useState({
     available: false,
     latestVersion: null,
@@ -226,8 +232,52 @@ export default function App() {
   }, [checkForUpdates, loadStoredState]);
 
   useEffect(() => {
-    NavigationBar.setBehaviorAsync("overlay-swipe");
-    NavigationBar.setVisibilityAsync("hidden");
+    let mounted = true;
+    const resetWalletConnectStorage = async () => {
+      try {
+        const cleaned = await getItem(WALLETCONNECT_STORAGE_KEY, null);
+        if (!cleaned) {
+          const keys = await AsyncStorage.getAllKeys();
+          const targets = keys.filter((key) =>
+            WALLETCONNECT_KEY_MARKERS.some((marker) =>
+              key.toLowerCase().includes(marker.toLowerCase())
+            )
+          );
+          if (targets.length) {
+            await AsyncStorage.multiRemove(targets);
+          }
+          await setItem(WALLETCONNECT_STORAGE_KEY, "1");
+        }
+      } catch (error) {
+        // Ignore storage cleanup errors to avoid blocking startup.
+      } finally {
+        if (mounted) {
+          setWalletReady(true);
+        }
+      }
+    };
+    resetWalletConnectStorage();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const configureNavBar = async () => {
+      try {
+        const NavigationBar = await import("expo-navigation-bar");
+        if (!mounted) return;
+        await NavigationBar.setBehaviorAsync("overlay-swipe");
+        await NavigationBar.setVisibilityAsync("hidden");
+      } catch (error) {
+        // Ignore navigation bar failures to avoid blocking app startup.
+      }
+    };
+    configureNavBar();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const saveServerUrl = useCallback(async () => {
@@ -301,35 +351,68 @@ export default function App() {
             "Wallet signature"
           );
         } catch (innerErr) {
-          typedData = {
-            types: {
-              EIP712Domain: [
-                { name: "name", type: "string" },
-                { name: "version", type: "string" },
-                { name: "chainId", type: "uint256" },
-                { name: "verifyingContract", type: "address" },
-              ],
-              Signin: [{ name: "contents", type: "string" }],
-            },
-            domain: {
-              name: "Side Quest",
-              version: "1",
-              chainId: 1,
-              verifyingContract: "0x0000000000000000000000000000000000000000",
-            },
-            primaryType: "Signin",
-            message: {
-              contents: message,
-            },
-          };
-          signature = await withTimeout(
-            provider.request({
-              method: "eth_signTypedData_v4",
-              params: [address, JSON.stringify(typedData)],
-            }),
-            20000,
-            "Wallet signature"
-          );
+          try {
+            signature = await withTimeout(
+              provider.request({
+                method: "eth_sign",
+                params: [address, message],
+              }),
+              20000,
+              "Wallet signature"
+            );
+          } catch (signErr) {
+            typedData = {
+              types: {
+                EIP712Domain: [
+                  { name: "name", type: "string" },
+                  { name: "version", type: "string" },
+                  { name: "chainId", type: "uint256" },
+                  { name: "verifyingContract", type: "address" },
+                ],
+                Signin: [{ name: "contents", type: "string" }],
+              },
+              domain: {
+                name: "Side Quest",
+                version: "1",
+                chainId: 1,
+                verifyingContract: "0x0000000000000000000000000000000000000000",
+              },
+              primaryType: "Signin",
+              message: {
+                contents: message,
+              },
+            };
+            try {
+              signature = await withTimeout(
+                provider.request({
+                  method: "eth_signTypedData_v4",
+                  params: [address, JSON.stringify(typedData)],
+                }),
+                20000,
+                "Wallet signature"
+              );
+            } catch (typedErr) {
+              try {
+                signature = await withTimeout(
+                  provider.request({
+                    method: "eth_signTypedData",
+                    params: [address, typedData],
+                  }),
+                  20000,
+                  "Wallet signature"
+                );
+              } catch (typedFallbackErr) {
+                signature = await withTimeout(
+                  provider.request({
+                    method: "eth_signTypedData_v3",
+                    params: [address, JSON.stringify(typedData)],
+                  }),
+                  20000,
+                  "Wallet signature"
+                );
+              }
+            }
+          }
         }
       }
       const authPayload = await withTimeout(
@@ -391,6 +474,20 @@ export default function App() {
     } catch (error) {
       console.error("Wallet reset failed.", error);
     }
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const targets = keys.filter((key) =>
+        WALLETCONNECT_KEY_MARKERS.some((marker) =>
+          key.toLowerCase().includes(marker.toLowerCase())
+        )
+      );
+      if (targets.length) {
+        await AsyncStorage.multiRemove(targets);
+      }
+      await setItem(WALLETCONNECT_STORAGE_KEY, "1");
+    } catch (error) {
+      // Ignore storage cleanup errors.
+    }
     await removeItem(STORAGE_KEYS.authToken);
     await removeItem(STORAGE_KEYS.authWallet);
     setToken(null);
@@ -421,11 +518,31 @@ export default function App() {
   const closeBuyCredits = useCallback(() => setBuyCreditsVisible(false), []);
   const openCharacterCreator = useCallback(() => setCreationVisible(true), []);
   const closeCharacterCreator = useCallback(() => setCreationVisible(false), []);
+  const openWallet = useCallback(() => {
+    if (!walletReady) {
+      setAuthStatus({
+        loading: false,
+        error: "WalletConnect is starting. Try again in a moment.",
+      });
+      return;
+    }
+    open();
+  }, [open, walletReady]);
   const [pendingCharacterEntry, setPendingCharacterEntry] = useState(null);
   const [pendingSessionEntry, setPendingSessionEntry] = useState(null);
   const [resetSessionToken, setResetSessionToken] = useState(0);
   const handleCharacterCreated = useCallback(
     (character) => {
+      const requestId = character?.requestId || null;
+      if (requestId && lastCharacterRequestRef.current === requestId) {
+        return;
+      }
+      if (pendingCharacterEntry && Date.now() - pendingCharacterEntry.timestamp < 5000) {
+        return;
+      }
+      if (requestId) {
+        lastCharacterRequestRef.current = requestId;
+      }
       closeCharacterCreator();
       setActiveTab("story");
       setPendingCharacterEntry({ ...character, timestamp: Date.now() });
@@ -433,7 +550,7 @@ export default function App() {
       setCurrentCharacter(character);
       setJson(STORAGE_KEYS.lastCharacter, character);
     },
-    [closeCharacterCreator, setActiveTab]
+    [closeCharacterCreator, setActiveTab, pendingCharacterEntry]
   );
   const handleStoryEntryConsumed = useCallback(() => {
     setPendingCharacterEntry(null);
@@ -601,7 +718,7 @@ export default function App() {
           walletStatus={walletStatus}
           walletAddress={wallet || address}
           walletConnected={isConnected}
-          onOpenWallet={open}
+          onOpenWallet={openWallet}
           authStatus={authStatus}
           onSignIn={signInWithWallet}
           onDisconnect={disconnectWallet}
@@ -611,6 +728,7 @@ export default function App() {
         <WalletConnectModal
           projectId={WALLETCONNECT_PROJECT_ID}
           providerMetadata={WALLETCONNECT_METADATA}
+          relayUrl={WALLETCONNECT_RELAY_URL}
           sessionParams={WALLETCONNECT_SESSION_PARAMS}
         />
       </>
@@ -637,11 +755,6 @@ export default function App() {
             </View>
           </SafeAreaView>
         </Screen>
-        <WalletConnectModal
-          projectId={WALLETCONNECT_PROJECT_ID}
-          providerMetadata={WALLETCONNECT_METADATA}
-          sessionParams={WALLETCONNECT_SESSION_PARAMS}
-        />
       </>
     );
   }
@@ -682,7 +795,7 @@ export default function App() {
             <BuyCreditsScreen
               serverUrl={serverUrl}
               onCreditsUpdate={setCredits}
-              onOpenWallet={open}
+              onOpenWallet={openWallet}
             />
           </View>
         </View>
@@ -756,6 +869,7 @@ export default function App() {
       <WalletConnectModal
         projectId={WALLETCONNECT_PROJECT_ID}
         providerMetadata={WALLETCONNECT_METADATA}
+        relayUrl={WALLETCONNECT_RELAY_URL}
         sessionParams={WALLETCONNECT_SESSION_PARAMS}
       />
     </>

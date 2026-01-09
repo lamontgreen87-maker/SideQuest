@@ -125,6 +125,7 @@ $form.Controls.AddRange(@(
 $lastWriteTime = [DateTime]::MinValue
 $lastClerkWriteTime = [DateTime]::MinValue
 $modelPath = Join-Path $PSScriptRoot "model_name.txt"
+$lastPaymentLine = ""
 
 function Get-LogText {
     param($Path, $Tail)
@@ -157,6 +158,27 @@ function Update-LogBox {
         if ($Box.Text -notlike "Log file not found*") {
             $Box.Text = Get-LogText -Path $Path -Tail $TailLines
         }
+    }
+}
+
+function Check-PaymentSound {
+    param([string]$LogText)
+    if (-not $LogText) { return }
+    $lines = $LogText -split [Environment]::NewLine
+    $match = $lines | Select-String -Pattern "Payment credited" | Select-Object -Last 1
+    if (-not $match) { return }
+    $current = $match.Line
+    if ($current -and $current -ne $lastPaymentLine) {
+        $lastPaymentLine = $current
+        $logoffSound = Join-Path $env:WINDIR "Media\Windows Logoff Sound.wav"
+        if (Test-Path $logoffSound) {
+            $player = New-Object System.Media.SoundPlayer
+            $player.SoundLocation = $logoffSound
+            $player.Play()
+        } else {
+            [System.Media.SystemSounds]::Asterisk.Play()
+        }
+        $statusLabel.Text = "Payment detected at $(Get-Date -Format 'HH:mm:ss')."
     }
 }
 
@@ -283,6 +305,9 @@ $timer.Add_Tick({
     $activePath = if ($toggleErrors.Checked) { $ErrLogPath } else { $LogPath }
     Update-LogBox -Path $activePath -Box $serverTextBox -LastWriteRef ([ref]$lastWriteTime)
     Update-LogBox -Path $ClerkLogPath -Box $clerkTextBox -LastWriteRef ([ref]$lastClerkWriteTime)
+    if (-not $toggleErrors.Checked) {
+        Check-PaymentSound -LogText $serverTextBox.Text
+    }
     $statusLabel.Text = "Updated $(Get-Date -Format 'HH:mm:ss')"
 })
 

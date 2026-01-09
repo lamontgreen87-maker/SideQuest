@@ -19,7 +19,8 @@ except ImportError:  # eth_account >= 0.9 uses encode_typed_data
     from eth_account.messages import encode_typed_data as encode_structured_data
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pathlib import Path
 from pydantic import BaseModel
 
 from rules import (
@@ -41,6 +42,7 @@ from rules import (
     serialize_rules_session,
 )
 app = FastAPI()
+PRIVACY_POLICY_PATH = Path(__file__).resolve().parent / "static" / "privacy.html"
 logger = logging.getLogger("uvicorn.error")
 
 # --- App Configuration ---
@@ -65,7 +67,7 @@ PAYMENT_POLL_INTERVAL = float(os.getenv("PAYMENT_POLL_INTERVAL", "15"))
 PAYMENT_MAX_BLOCK_RANGE = int(os.getenv("PAYMENT_MAX_BLOCK_RANGE", "100"))
 PRICE_TABLE_JSON = os.getenv("PRICE_TABLE_JSON", "")
 PRICE_PER_CREDIT_USDT = os.getenv("PRICE_PER_CREDIT_USDT", "0.02")
-STARTING_CREDITS = int(os.getenv("STARTING_CREDITS", "25"))
+STARTING_CREDITS = int(os.getenv("STARTING_CREDITS", "50"))
 
 SKILL_TO_ABILITY = {
     "athletics": "str",
@@ -123,11 +125,23 @@ DEFAULT_SYSTEM_PROMPT = (
     "Do not output thought tags or step-by-step logic. "
     "Respond with final narration only, no preface."
 )
+DEFAULT_CAMPAIGN_BRIEF = (
+    "A storm-battered frontier teeters as a buried horror stirs beneath ruined keeps. "
+    "Disappearances and a leaking vault light pull the hero into a desperate hunt."
+)
+DEFAULT_CAMPAIGN_WORLD = (
+    "A scarred frontier of ruined keeps and flooded mines clings to a river of ash. "
+    "Rival factions and a lurking horror contest control as vanishings spread."
+)
 
 def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]) -> str:
     safe_state = json.dumps(state, ensure_ascii=True)
     safe_world = json.dumps(world_state, ensure_ascii=True)
     world_summary = str(world_state.get("summary") or "").strip()
+    campaign_summary = ""
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict):
+        campaign_summary = str(campaign.get("summary") or "").strip()
     combat_mode = bool(state.get("in_combat"))
     combat_line = ""
     if combat_mode:
@@ -150,6 +164,7 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         + "'NARRATION_HINT: skip' to signal whether the next action deserves narration.\n"
         + combat_line
         + loot_line
+        + ("Campaign brief:\n" + campaign_summary + "\n" if campaign_summary else "")
         + ("World summary:\n" + world_summary + "\n" if world_summary else "")
         + "Game state JSON:\n"
         + safe_state
@@ -472,6 +487,8 @@ payment_orders: Dict[str, Dict[str, Any]] = {}
 payment_state: Dict[str, Any] = {}
 payment_watcher_task: Optional[asyncio.Task] = None
 world_state_store: Dict[str, Dict[str, Any]] = {}
+campaign_seed_locks: Dict[str, asyncio.Lock] = {}
+intro_locks: Dict[str, asyncio.Lock] = {}
 
 
 def load_rules_sessions() -> None:
@@ -983,6 +1000,14 @@ async def process_payment_logs() -> None:
                 user["credits"] = int(user.get("credits", 0)) + int(order.get("credits", 0))
                 order["status"] = "credited"
                 order["credited_at"] = datetime.utcnow().isoformat()
+                logger.info(
+                    "Payment credited order_id=%s amount=%s wallet=%s credits=%s tx=%s",
+                    order.get("id"),
+                    order.get("amount"),
+                    order.get("wallet"),
+                    order.get("credits"),
+                    order.get("tx_hash"),
+                )
                 save_simple_store(USERS_STORE_PATH, users_store)
     save_payments()
 
@@ -1118,6 +1143,8 @@ def default_world_state() -> Dict[str, Any]:
     return {
         "summary": "",
         "facts": [],
+        "campaign": {},
+        "campaign_world": "",
         "updated_at": stamp_now(),
     }
 
@@ -1130,6 +1157,10 @@ def ensure_world_state(session_id: str) -> Dict[str, Any]:
         existing["facts"] = []
     if "summary" not in existing:
         existing["summary"] = ""
+    if "campaign" not in existing:
+        existing["campaign"] = {}
+    if "campaign_world" not in existing:
+        existing["campaign_world"] = ""
     return existing
 
 def apply_world_updates(world_state: Dict[str, Any], updates: List[str]) -> Dict[str, Any]:
@@ -1631,10 +1662,200 @@ async def clerk_filter_story(
             build_continue_messages(continuation_prompt),
             True,
             12,
+            model_name=CLERK_MODEL_NAME,
+            fallback_model=CLERK_FALLBACK_MODEL,
         )
         if continuation:
             cleaned = (cleaned + " " + continuation).strip()
     return cleaned
+
+async def ensure_campaign_brief(
+    state: Dict[str, Any],
+    world_state: Dict[str, Any],
+    name: str,
+    klass: str,
+    lock_key: Optional[str] = None,
+    store_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict) and str(campaign.get("summary") or "").strip():
+        return world_state
+    if lock_key:
+        lock = campaign_seed_locks.setdefault(lock_key, asyncio.Lock())
+        async with lock:
+            tag = f" session_id={lock_key}"
+            if store_key:
+                store_world = world_state_store.get(store_key)
+                if isinstance(store_world, dict):
+                    world_state = store_world
+            campaign = world_state.get("campaign")
+            if isinstance(campaign, dict) and str(campaign.get("summary") or "").strip():
+                return world_state
+            world_seed = str(world_state.get("campaign_world") or "").strip()
+            if not world_seed:
+                log_clerk_event("campaign_world generating" + tag)
+                try:
+                    world_seed = await asyncio.wait_for(
+                        _build_campaign_world(state),
+                        timeout=20,
+                    )
+                except asyncio.TimeoutError:
+                    log_clerk_event("campaign_world timeout fallback" + tag)
+                    world_seed = DEFAULT_CAMPAIGN_WORLD
+                updated = dict(world_state)
+                updated["campaign_world"] = world_seed
+                updated["updated_at"] = stamp_now()
+                world_state = updated
+                log_clerk_event("campaign_world ready" + tag)
+                if store_key:
+                    world_state_store[store_key] = updated
+                    persist_world_state()
+            log_clerk_event("campaign_seed generating" + tag)
+            try:
+                brief = await asyncio.wait_for(
+                    _build_campaign_brief_from_world(world_seed, name, klass),
+                    timeout=30,
+                )
+            except asyncio.TimeoutError:
+                log_clerk_event("campaign_seed timeout fallback" + tag)
+                brief = DEFAULT_CAMPAIGN_BRIEF
+            updated = dict(world_state)
+            updated["campaign"] = {"summary": brief, "created_at": stamp_now()}
+            updated["updated_at"] = stamp_now()
+            log_clerk_event("campaign_seed ready" + tag)
+            if store_key:
+                world_state_store[store_key] = updated
+                persist_world_state()
+            return updated
+    world_seed = str(world_state.get("campaign_world") or "").strip()
+    if not world_seed:
+        log_clerk_event("campaign_world generating")
+        try:
+            world_seed = await asyncio.wait_for(
+                _build_campaign_world(state),
+                timeout=20,
+            )
+        except asyncio.TimeoutError:
+            log_clerk_event("campaign_world timeout fallback")
+            world_seed = DEFAULT_CAMPAIGN_WORLD
+        updated = dict(world_state)
+        updated["campaign_world"] = world_seed
+        updated["updated_at"] = stamp_now()
+        world_state = updated
+        log_clerk_event("campaign_world ready")
+        if store_key:
+            world_state_store[store_key] = updated
+            persist_world_state()
+    log_clerk_event("campaign_seed generating")
+    try:
+        brief = await asyncio.wait_for(
+            _build_campaign_brief_from_world(world_seed, name, klass),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        log_clerk_event("campaign_seed timeout fallback")
+        brief = DEFAULT_CAMPAIGN_BRIEF
+    updated = dict(world_state)
+    updated["campaign"] = {"summary": brief, "created_at": stamp_now()}
+    updated["updated_at"] = stamp_now()
+    log_clerk_event("campaign_seed ready")
+    return updated
+
+async def _build_campaign_world(state: Dict[str, Any]) -> str:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a game world architect for a dark fantasy dungeon crawl. "
+                "Write 2 short sentences describing: setting, factions, and the current crisis. "
+                "Keep it grounded and gameable. "
+                "Mature themes (violence, horror, moral ambiguity) are allowed, "
+                "but avoid explicit sexual content."
+            ),
+        },
+        {"role": "user", "content": "Create a compact world state."},
+    ]
+    try:
+        text = strip_thoughts(
+            (
+                await asyncio.wait_for(
+                    ollama_chat_with_model(
+                        messages,
+                        fast=True,
+                        model_name=MODEL_NAME,
+                        fallback_model=FALLBACK_MODEL_NAME,
+                    ),
+                    timeout=25,
+                )
+            ).strip()
+        )
+    except asyncio.TimeoutError:
+        log_clerk_event("campaign_world timeout fallback")
+        return DEFAULT_CAMPAIGN_WORLD
+    return text or DEFAULT_CAMPAIGN_WORLD
+
+async def _build_campaign_brief_from_world(
+    world_seed: str,
+    name: str,
+    klass: str,
+) -> str:
+    identity = ""
+    if name and klass:
+        identity = f"The hero is {name}, a {klass}."
+    elif name:
+        identity = f"The hero is {name}."
+    elif klass:
+        identity = f"The hero is a {klass}."
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a campaign designer for a dark fantasy dungeon crawl. "
+                "Write a compact campaign brief in 2-3 sentences. "
+                "Include: setting, central threat, and an immediate opening problem. "
+                "Mature themes are allowed "
+                "(violence, horror, moral ambiguity), but avoid explicit sexual content. "
+                "Keep it punchy and gameable."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Use this world state and craft a campaign brief:\n"
+                + world_seed
+                + "\n"
+                + identity
+            ).strip(),
+        },
+    ]
+    brief = strip_thoughts(
+        (
+            await ollama_chat_with_model(
+                messages,
+                fast=True,
+                model_name=MODEL_NAME,
+                fallback_model=FALLBACK_MODEL_NAME,
+            )
+        ).strip()
+    )
+    if count_words(brief) < 18:
+        retry = strip_thoughts(
+            (
+                await ollama_chat_with_model(
+                    build_retry_messages(messages),
+                    fast=True,
+                    model_name=MODEL_NAME,
+                    fallback_model=FALLBACK_MODEL_NAME,
+                )
+            ).strip()
+        )
+        if retry:
+            brief = retry
+    brief = strip_thoughts(brief).strip()
+    brief, _ = split_narration_hint(brief)
+    if not brief:
+        brief = DEFAULT_CAMPAIGN_BRIEF
+    return brief
 
 async def generate_intro_story(
     state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str
@@ -1646,23 +1867,177 @@ async def generate_intro_story(
         identity = f"The hero is {name}."
     elif klass:
         identity = f"The hero is a {klass}."
+    campaign_summary = ""
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict):
+        campaign_summary = str(campaign.get("summary") or "").strip()
     prompt = (
-        "Write an opening scene for a dungeon crawl (2-4 sentences). "
+        "Write an opening scene for a dungeon crawl (exactly 2 sentences). "
         "Make it vivid and specific with a clear hook, then end with a direct question. "
         "Include a hint of danger and wonder. "
         + identity
+        + (" Campaign brief: " + campaign_summary if campaign_summary else "")
         + " Avoid clichAc tavern starts."
     ).strip()
     messages = [
         {"role": "system", "content": build_story_system_prompt(state, world_state)},
         {"role": "user", "content": prompt},
     ]
-    text = await generate_min_response(messages, fast=True, min_words=24)
+    text = strip_thoughts(
+        (
+            await ollama_chat_with_model(
+                messages,
+                fast=True,
+                model_name=CLERK_MODEL_NAME,
+                fallback_model=CLERK_FALLBACK_MODEL,
+            )
+        ).strip()
+    )
+    if count_words(text) < 12:
+        retry = strip_thoughts(
+            (
+                await ollama_chat_with_model(
+                    build_retry_messages(messages),
+                    fast=True,
+                    model_name=CLERK_MODEL_NAME,
+                    fallback_model=CLERK_FALLBACK_MODEL,
+                )
+            ).strip()
+        )
+        if retry:
+            text = retry
     text, hint = split_narration_hint(text)
     if hint:
         state["narration_hint"] = hint
-    cleaned = await clerk_filter_story(state, world_state, text)
-    return cleaned or text
+    if text:
+        return strip_state_leaks(text, state, world_state)
+    retry = await generate_min_response(messages, fast=True, min_words=12)
+    retry, hint = split_narration_hint(retry)
+    if hint:
+        state["narration_hint"] = hint
+    if retry:
+        return strip_state_leaks(retry, state, world_state)
+    log_clerk_event("intro_story empty fallback")
+    return build_campaign_intro_fallback(world_state, name, klass)
+
+async def generate_clerk_intro_fast(
+    state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str
+) -> str:
+    identity = ""
+    if name and klass:
+        identity = f"The hero is {name}, a {klass}."
+    elif name:
+        identity = f"The hero is {name}."
+    elif klass:
+        identity = f"The hero is a {klass}."
+    campaign_summary = ""
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict):
+        campaign_summary = str(campaign.get("summary") or "").strip()
+    prompt = (
+        "Write a fast opening scene (exactly 2 sentences). "
+        "Make it punchy and end with a direct question. "
+        + identity
+        + (" Campaign brief: " + campaign_summary if campaign_summary else "")
+        + " Avoid tavern starts."
+    ).strip()
+    messages = [
+        {"role": "system", "content": build_story_system_prompt(state, world_state)},
+        {"role": "user", "content": prompt},
+    ]
+    try:
+        text = strip_thoughts(
+            (
+                await asyncio.wait_for(
+                    ollama_chat_with_model(
+                        messages,
+                        fast=True,
+                        model_name=CLERK_MODEL_NAME,
+                        fallback_model=CLERK_FALLBACK_MODEL,
+                    ),
+                    timeout=15,
+                )
+            ).strip()
+        )
+    except asyncio.TimeoutError:
+        text = ""
+    text, hint = split_narration_hint(text)
+    if hint:
+        state["narration_hint"] = hint
+    if text:
+        return strip_state_leaks(text, state, world_state)
+    # fallback to deterministic intro
+    identity = ""
+    if name and klass:
+        identity = f"{name}, the {klass}, "
+    elif name:
+        identity = f"{name} "
+    elif klass:
+        identity = f"The {klass} "
+    campaign = world_state.get("campaign") if isinstance(world_state, dict) else {}
+    summary = ""
+    if isinstance(campaign, dict):
+        summary = str(campaign.get("summary") or "").strip()
+    if not summary:
+        summary = DEFAULT_CAMPAIGN_BRIEF
+    parts = [part.strip() for part in summary.split(".") if part.strip()]
+    seed = parts[0] if parts else summary
+    seed = seed.rstrip(". ")
+    lead = f"{seed} {identity}steps into the trouble promised by the campaign's opening.".strip()
+    if not lead.endswith("."):
+        lead = f"{lead}."
+    return f"{lead} What do you do?"
+
+async def generate_narrator_intro_followup(
+    state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str, base_intro: str
+) -> str:
+    identity = ""
+    if name and klass:
+        identity = f"The hero is {name}, a {klass}."
+    elif name:
+        identity = f"The hero is {name}."
+    elif klass:
+        identity = f"The hero is a {klass}."
+    prompt = (
+        "Expand the opening in 2-3 sentences without repeating. "
+        "End with a direct question. "
+        + identity
+        + " Base intro: "
+        + base_intro
+    ).strip()
+    messages = [
+        {"role": "system", "content": build_story_system_prompt(state, world_state)},
+        {"role": "user", "content": prompt},
+    ]
+    text = strip_thoughts((await ollama_chat(messages, fast=False)).strip())
+    if text:
+        text, _ = split_narration_hint(text)
+        return strip_state_leaks(text, state, world_state)
+    return ""
+
+def build_campaign_intro_fallback(
+    world_state: Dict[str, Any], name: str, klass: str
+) -> str:
+    campaign = world_state.get("campaign") if isinstance(world_state, dict) else {}
+    summary = ""
+    if isinstance(campaign, dict):
+        summary = str(campaign.get("summary") or "").strip()
+    if not summary:
+        summary = DEFAULT_CAMPAIGN_BRIEF
+    parts = [part.strip() for part in summary.split(".") if part.strip()]
+    seed = ". ".join(parts[:2]) if parts else summary
+    identity = ""
+    if name and klass:
+        identity = f"{name}, the {klass}, "
+    elif name:
+        identity = f"{name} "
+    elif klass:
+        identity = f"The {klass} "
+    opener = f"{identity}steps into the trouble promised by the campaign's opening."
+    question = "What do you do?"
+    if seed:
+        return f"{seed}. {opener} {question}"
+    return f"{opener} {question}"
 
 def fallback_reply(messages: List[Dict[str, str]]) -> str:
     variations = [
@@ -1671,6 +2046,47 @@ def fallback_reply(messages: List[Dict[str, str]]) -> str:
         "The air smells of damp stone and old smoke. Your move?",
     ]
     return random.choice(variations)
+
+INTRO_FALLBACKS = [
+    "A rusted gate groans open onto a stairwell that descends into wet darkness. A single lantern guttering on the wall seems to wait for you. Do you step in or search the entryway first?",
+    "Rain drums on shattered statues as a narrow path leads to a sealed door in the hillside. A faint pulse of blue light leaks from the seam. Do you touch the door or scout around?",
+    "The ground trembles and a hidden hatch yawns open with a sigh of stale air. A trail of fresh footprints vanishes into the black. Do you follow them or listen for movement?",
+    "A cracked bell tolls once from somewhere below the ruins, then falls silent. The stone under your boots is etched with warnings you can barely read. Do you descend or inspect the carvings?",
+    "The bridge ahead is slick with moss and spans a pit that exhales warm, sulfurous breath. A soft whisper rises from the far side, calling your name. Do you cross or hold position?",
+    "Torchlight flickers across a collapsed shrine where an altar has split in two. Something glints between the stones, pulsing like a heartbeat. Do you pry it free or back away?",
+    "A corridor of black glass reflects your face in a dozen fractured angles. The reflections lag behind your movements by a heartbeat. Do you press on or test the glass?",
+    "A low chant echoes from a sealed archway covered in wax seals. One seal hangs loose and drips onto the floor. Do you break it or study the markings?",
+    "The wind carries a scent of iron and wild herbs from a narrow tunnel. A cold breeze pushes from within as if urging you forward. Do you enter or scout the surroundings?",
+    "A mound of ash hides a trapdoor with fresh scrape marks around its edge. A faint thudding comes from below. Do you open it or set a guard?",
+    "A shallow pool blocks the passage, its surface unbroken and black. Ripples form when you breathe near it. Do you wade in or look for a way around?",
+    "A collapsed library lies ahead, its shelves twisted into a maze. A single intact book rests on a pedestal in the center. Do you approach or check for traps?",
+    "The tunnel widens into a chamber where a stone giant kneels, frozen mid-prayer. Dust falls from its shoulders like snow. Do you move past it or examine the statue?",
+    "A rusted portcullis hangs half-open, swaying slightly though there is no wind. A faint scraping sound moves on the other side. Do you slip through or call out?",
+    "A broken mirror leans against the wall, reflecting a corridor that is not there. The reflected corridor is lit by torches that burn without heat. Do you touch the mirror or ignore it?",
+    "The path narrows between two leaning pillars carved with thorn motifs. A thin string of bells trembles as you pass. Do you cut the string or move carefully?",
+    "A stack of crates blocks a side passage, marked with the sigil of a lost order. The wood is recent, not ancient. Do you investigate or stay the course?",
+    "You reach a crossroads where one tunnel descends with a steady drip, and the other rises toward a warm glow. The air shifts between cold and hot with each breath. Which way do you go?",
+    "A circle of candles burns without flame, casting a pale halo on the floor. Inside the circle lies a bundle wrapped in cloth. Do you step inside or leave it be?",
+    "A chasm splits the floor, and a narrow beam spans it like a balance test. On the far side, a small chest sits untouched. Do you cross or search for another route?",
+    "The stone walls here are etched with tally marks, too many to count. A fresh mark appears as you watch, as if carved by an unseen hand. Do you stay or move on?",
+    "A faint melody plays from a corridor filled with drifting dust motes. The music is slow and unfamiliar, yet it pulls at your memory. Do you follow it or resist?",
+    "A rusted suit of armor slumps against the wall, its helm turned toward you. As you approach, a loose gauntlet slides across the floor. Do you take it or step back?",
+    "A narrow stairwell spirals down, each step damp and slick. At the bottom, a single candle burns green. Do you descend or wait for a sign?",
+    "A heavy door stands ajar, warm air spilling out with the scent of spice and smoke. Shadows flicker beyond, though no fire is visible. Do you enter or shut it?",
+    "A rope bridge sways over a void, its boards creaking softly. Someone has tied a fresh knot at the far end. Do you cross or examine the knot?",
+    "A stone basin in the floor fills itself drop by drop, then drains just as quickly. The water leaves no mark. Do you test it or move on?",
+    "A narrow vent exhales a steady stream of hot air, making your cloak billow. The metal grate rattles when you lean near it. Do you open it or avoid it?",
+    "The passage is lined with faded banners, each stitched with a different crest. One banner is new and bright. Do you inspect it or keep moving?",
+    "A dozen iron keys hang from hooks on the wall, all slightly warm to the touch. The door beside them has no handle. Do you choose a key or search for another path?",
+    "A trail of wax leads to a candle that burns with a blue flame. The wax forms a circle that you have not crossed yet. Do you step inside or snuff the flame?",
+    "A pile of bones blocks the next corridor, arranged like a warning. One skull is freshly cracked. Do you clear the pile or retreat?",
+    "The floor here is covered in fine white sand, and a single set of footprints leads in but not out. A distant click echoes from the dark. Do you follow the tracks or set a trap?",
+    "A metal door hums with a low vibration, and tiny sparks dance across its surface. A lever nearby is set to the middle position. Do you pull it or leave it?",
+    "A ruined chapel opens into a vaulted chamber where moonlight filters from above. In the center, a stone sarcophagus is cracked open. Do you approach or search the room first?",
+]
+
+def pick_intro_fallback() -> str:
+    return random.choice(INTRO_FALLBACKS)
 
 def count_words(text: str) -> int:
     return len([part for part in text.strip().split() if part])
@@ -1696,25 +2112,71 @@ def has_action_prompt(text: str) -> bool:
     ]
     return any(trigger in cleaned for trigger in triggers)
 
-async def generate_nonempty_response(messages: List[Dict[str, str]], fast: bool) -> str:
-    response_text = strip_thoughts((await ollama_chat(messages, fast)).strip())
+async def generate_nonempty_response(
+    messages: List[Dict[str, str]],
+    fast: bool,
+    model_name: Optional[str] = None,
+    fallback_model: Optional[str] = None,
+) -> str:
+    model = model_name or MODEL_NAME
+    fallback = fallback_model or (FALLBACK_MODEL_NAME if model == MODEL_NAME else model)
+    response_text = strip_thoughts(
+        (await ollama_chat_with_model(messages, fast, model_name=model, fallback_model=fallback)).strip()
+    )
     if response_text:
         return response_text
-    retry_text = strip_thoughts((await ollama_chat(build_retry_messages(messages), fast)).strip())
+    retry_text = strip_thoughts(
+        (
+            await ollama_chat_with_model(
+                build_retry_messages(messages),
+                fast,
+                model_name=model,
+                fallback_model=fallback,
+            )
+        ).strip()
+    )
     if retry_text:
         return retry_text
     return fallback_reply(messages)
 
-async def generate_min_response(messages: List[Dict[str, str]], fast: bool, min_words: int) -> str:
-    response_text = strip_thoughts((await ollama_chat(messages, fast)).strip())
+async def generate_min_response(
+    messages: List[Dict[str, str]],
+    fast: bool,
+    min_words: int,
+    model_name: Optional[str] = None,
+    fallback_model: Optional[str] = None,
+) -> str:
+    model = model_name or MODEL_NAME
+    fallback = fallback_model or (FALLBACK_MODEL_NAME if model == MODEL_NAME else model)
+    response_text = strip_thoughts(
+        (await ollama_chat_with_model(messages, fast, model_name=model, fallback_model=fallback)).strip()
+    )
     if count_words(response_text) >= min_words:
         if ends_with_sentence(response_text):
             return response_text
-        continuation = strip_thoughts((await ollama_chat(build_continue_messages(messages), fast)).strip())
+        continuation = strip_thoughts(
+            (
+                await ollama_chat_with_model(
+                    build_continue_messages(messages),
+                    fast,
+                    model_name=model,
+                    fallback_model=fallback,
+                )
+            ).strip()
+        )
         if continuation:
             return (response_text + " " + continuation).strip()
         return response_text
-    retry_text = strip_thoughts((await ollama_chat(build_continue_messages(messages), fast)).strip())
+    retry_text = strip_thoughts(
+        (
+            await ollama_chat_with_model(
+                build_continue_messages(messages),
+                fast,
+                model_name=model,
+                fallback_model=fallback,
+            )
+        ).strip()
+    )
     if retry_text:
         combined = (response_text + " " + retry_text).strip()
         if count_words(combined) >= min_words:
@@ -1877,6 +2339,13 @@ async def startup_load_rules():
 @app.get("/")
 async def root():
     return {"message": "AI Dungeon Master Backend is running!"}
+
+
+@app.get("/privacy")
+async def privacy_policy():
+    if not PRIVACY_POLICY_PATH.exists():
+        raise HTTPException(status_code=404, detail="Privacy policy not found.")
+    return FileResponse(PRIVACY_POLICY_PATH, media_type="text/html")
 
 @app.get("/health")
 async def health():
@@ -2205,16 +2674,32 @@ async def send_message(
                 *tail,
                 {"role": "user", "content": story_input},
             ]
-            response_text = await generate_min_response(model_messages, fast, 28)
+            response_text = await generate_min_response(
+                model_messages,
+                fast,
+                28,
+                model_name=CLERK_MODEL_NAME,
+                fallback_model=CLERK_FALLBACK_MODEL,
+            )
             last_assistant = get_last_assistant_message(session["messages"])
             if last_assistant and response_text.strip() == last_assistant.strip():
                 retry_context = build_avoid_repeat_messages(without_last_assistant(model_messages))
-                response_text = await generate_min_response(retry_context, fast, 28)
+                response_text = await generate_min_response(
+                    retry_context,
+                    fast,
+                    28,
+                    model_name=CLERK_MODEL_NAME,
+                    fallback_model=CLERK_FALLBACK_MODEL,
+                )
                 if response_text.strip() == last_assistant.strip():
                     response_text = fallback_reply(model_messages)
             if response_text and not ends_with_sentence(response_text):
                 continuation = await generate_min_response(
-                    build_continue_messages(model_messages), fast, 14
+                    build_continue_messages(model_messages),
+                    fast,
+                    14,
+                    model_name=CLERK_MODEL_NAME,
+                    fallback_model=CLERK_FALLBACK_MODEL,
                 )
                 if continuation:
                     response_parts = [response_text, continuation]
@@ -2311,18 +2796,32 @@ async def continue_message(
             *tail,
         ]
         continue_messages = build_continue_messages(build_avoid_repeat_messages(model_messages))
-        response_text = await generate_min_response(continue_messages, fast, 28)
+        response_text = await generate_min_response(
+            continue_messages,
+            fast,
+            28,
+            model_name=CLERK_MODEL_NAME,
+            fallback_model=CLERK_FALLBACK_MODEL,
+        )
         last_assistant = get_last_assistant_message(session["messages"])
         if last_assistant and response_text.strip() == last_assistant.strip():
             retry_context = build_avoid_repeat_messages(without_last_assistant(model_messages))
             response_text = await generate_min_response(
-                build_continue_messages(retry_context), fast, 28
+                build_continue_messages(retry_context),
+                fast,
+                28,
+                model_name=CLERK_MODEL_NAME,
+                fallback_model=CLERK_FALLBACK_MODEL,
             )
             if response_text.strip() == last_assistant.strip():
                 response_text = fallback_reply(model_messages)
         if response_text and not ends_with_sentence(response_text):
             continuation = await generate_min_response(
-                build_continue_messages(model_messages), fast, 14
+                build_continue_messages(model_messages),
+                fast,
+                14,
+                model_name=CLERK_MODEL_NAME,
+                fallback_model=CLERK_FALLBACK_MODEL,
             )
             if continuation:
                 response_text = (response_text + " " + continuation).strip()
@@ -2389,47 +2888,18 @@ async def stream_message_get(
 async def generate_intro(payload: IntroRequest, user: Dict[str, Any] = Depends(require_auth)):
     name = (payload.name or "").strip()
     klass = (payload.klass or "").strip()
-    identity = ""
-    if name and klass:
-        identity = f"The hero is {name}, a {klass}."
-    elif name:
-        identity = f"The hero is {name}."
-    elif klass:
-        identity = f"The hero is a {klass}."
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a fantasy narrator. Write an opening scene (2-4 sentences). "
-                "Make it vivid and specific with a clear hook, then end with a direct question."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                "Create a new opening scene for a dungeon crawl with a hint of danger and wonder. "
-                + identity
-                + " Avoid cliché tavern starts."
-            ).strip(),
-        },
-    ]
-    prompt = (
-        "Write an opening scene for a dungeon crawl (2-4 sentences). "
-        "Make it vivid and specific with a clear hook, then end with a direct question. "
-        "Include a hint of danger and wonder. "
-        + identity
-        + " Avoid cliché tavern starts."
-    ).strip()
     start_time = time.monotonic()
     try:
-        text = (await ollama_chat(messages, fast=True)).strip()
-        if not text:
-            retry_text = (await ollama_chat(build_retry_messages(messages), fast=True)).strip()
-            text = retry_text or text
-        if not text:
-            text = (await ollama_generate(prompt, fast=True)).strip()
-        if not text:
-            text = (await ollama_generate_basic(prompt)).strip()
+        temp_state = default_game_state()
+        temp_world = apply_character_to_world(default_world_state(), name, klass, None)
+        temp_world = await ensure_campaign_brief(
+            temp_state,
+            temp_world,
+            name,
+            klass,
+            lock_key="intro",
+        )
+        text = await generate_intro_story(temp_state, temp_world, name, klass)
         if text:
             logger.info("Intro generation completed in %.2fs", time.monotonic() - start_time)
             return IntroResponse(intro=text)
@@ -2443,7 +2913,7 @@ async def generate_intro(payload: IntroRequest, user: Dict[str, Any] = Depends(r
             time.monotonic() - start_time,
             exc,
         )
-    return IntroResponse(intro="A distant bell tolls in the dark. What do you do?")
+    return IntroResponse(intro=pick_intro_fallback())
 
 @app.post(
     "/api/sessions/{session_id}/intro",
@@ -2455,33 +2925,74 @@ async def generate_session_intro(
     payload: IntroSessionRequest,
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    session = get_session_or_404(session_id)
-    ensure_session_state(session)
-    log_clerk_event(f"intro_request received session_id={session_id}")
-    world_state = ensure_world_state(session_id)
-    name = (payload.name or "").strip()
-    klass = (payload.klass or "").strip()
-    log_clerk_event("intro_request applying character to game/world state")
-    session["game_state"] = apply_character_to_state(
-        session["game_state"], name, klass, payload.character
-    )
-    world_state = apply_character_to_world(world_state, name, klass, payload.character)
-    world_state_store[session_id] = world_state
-    persist_world_state()
-    try:
-        log_clerk_event("intro_request generating story")
-        intro = await generate_intro_story(session["game_state"], world_state, name, klass)
+    lock = intro_locks.setdefault(session_id, asyncio.Lock())
+    if lock.locked():
+        log_clerk_event(f"intro_request waiting for lock session_id={session_id}")
+    async with lock:
+        session = get_session_or_404(session_id)
+        ensure_session_state(session)
+        log_clerk_event(f"intro_request received session_id={session_id}")
+        if session.get("intro_generated") and session.get("last_assistant_message"):
+            log_clerk_event(f"intro_request reused session_id={session_id}")
+            return IntroResponse(intro=session["last_assistant_message"])
+        world_state = ensure_world_state(session_id)
+        name = (payload.name or "").strip()
+        klass = (payload.klass or "").strip()
+        log_clerk_event("intro_request applying character to game/world state")
+        session["game_state"] = apply_character_to_state(
+            session["game_state"], name, klass, payload.character
+        )
+        world_state = apply_character_to_world(world_state, name, klass, payload.character)
+        if not world_state.get("campaign_world"):
+            world_state["campaign_world"] = DEFAULT_CAMPAIGN_WORLD
+        if not isinstance(world_state.get("campaign"), dict):
+            world_state["campaign"] = {"summary": DEFAULT_CAMPAIGN_BRIEF, "created_at": stamp_now()}
+        world_state_store[session_id] = world_state
+        persist_world_state()
+        try:
+            log_clerk_event("intro_request generating clerk intro")
+            intro = await generate_clerk_intro_fast(
+                session["game_state"], world_state, name, klass
+            )
+        except Exception as exc:
+            logger.warning("Session intro generation failed: %s", exc)
+            intro = ""
         if not intro:
-            intro = "A distant bell tolls in the dark. What do you do?"
+            log_clerk_event("intro_request empty story fallback")
+            intro = pick_intro_fallback()
         session["messages"].append({"role": "assistant", "content": intro})
         session["last_assistant_at"] = stamp_now()
         session["last_assistant_message"] = intro
+        session["intro_generated"] = True
         session["pending_reply"] = False
-        persist_sessions()
+
+        async def _persist_intro_state() -> None:
+            try:
+                await asyncio.to_thread(persist_sessions)
+                await asyncio.to_thread(persist_world_state)
+            except Exception:
+                logger.exception("Session intro persistence failed")
+
+        asyncio.create_task(_persist_intro_state())
+        log_clerk_event("intro_request responding")
+
+        async def _background_intro_followup() -> None:
+            try:
+                updated_world = await ensure_campaign_brief(
+                    session["game_state"],
+                    world_state,
+                    name,
+                    klass,
+                    lock_key=session_id,
+                    store_key=session_id,
+                )
+                world_state_store[session_id] = updated_world
+                persist_world_state()
+            except Exception:
+                logger.exception("Session intro followup failed")
+
+        asyncio.create_task(_background_intro_followup())
         return IntroResponse(intro=intro)
-    except httpx.HTTPError as exc:
-        logger.warning("Session intro generation failed: %s", exc)
-        return IntroResponse(intro="A distant bell tolls in the dark. What do you do?")
 
 # --- Rules Engine (5e SRD, strict) ---
 @app.get("/api/rules/premades")
@@ -3016,3 +3527,4 @@ async def initiative_roll(session_id: str):
     session.log.append(f"{session.pc.name} rolls initiative: {total}.")
     persist_rules_sessions()
     return InitiativeResponse(total=total, rolls=rolls, bonus=bonus)
+
