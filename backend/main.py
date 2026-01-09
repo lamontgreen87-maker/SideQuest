@@ -2047,46 +2047,31 @@ def fallback_reply(messages: List[Dict[str, str]]) -> str:
     ]
     return random.choice(variations)
 
-INTRO_FALLBACKS = [
-    "A rusted gate groans open onto a stairwell that descends into wet darkness. A single lantern guttering on the wall seems to wait for you. Do you step in or search the entryway first?",
-    "Rain drums on shattered statues as a narrow path leads to a sealed door in the hillside. A faint pulse of blue light leaks from the seam. Do you touch the door or scout around?",
-    "The ground trembles and a hidden hatch yawns open with a sigh of stale air. A trail of fresh footprints vanishes into the black. Do you follow them or listen for movement?",
-    "A cracked bell tolls once from somewhere below the ruins, then falls silent. The stone under your boots is etched with warnings you can barely read. Do you descend or inspect the carvings?",
-    "The bridge ahead is slick with moss and spans a pit that exhales warm, sulfurous breath. A soft whisper rises from the far side, calling your name. Do you cross or hold position?",
-    "Torchlight flickers across a collapsed shrine where an altar has split in two. Something glints between the stones, pulsing like a heartbeat. Do you pry it free or back away?",
-    "A corridor of black glass reflects your face in a dozen fractured angles. The reflections lag behind your movements by a heartbeat. Do you press on or test the glass?",
-    "A low chant echoes from a sealed archway covered in wax seals. One seal hangs loose and drips onto the floor. Do you break it or study the markings?",
-    "The wind carries a scent of iron and wild herbs from a narrow tunnel. A cold breeze pushes from within as if urging you forward. Do you enter or scout the surroundings?",
-    "A mound of ash hides a trapdoor with fresh scrape marks around its edge. A faint thudding comes from below. Do you open it or set a guard?",
-    "A shallow pool blocks the passage, its surface unbroken and black. Ripples form when you breathe near it. Do you wade in or look for a way around?",
-    "A collapsed library lies ahead, its shelves twisted into a maze. A single intact book rests on a pedestal in the center. Do you approach or check for traps?",
-    "The tunnel widens into a chamber where a stone giant kneels, frozen mid-prayer. Dust falls from its shoulders like snow. Do you move past it or examine the statue?",
-    "A rusted portcullis hangs half-open, swaying slightly though there is no wind. A faint scraping sound moves on the other side. Do you slip through or call out?",
-    "A broken mirror leans against the wall, reflecting a corridor that is not there. The reflected corridor is lit by torches that burn without heat. Do you touch the mirror or ignore it?",
-    "The path narrows between two leaning pillars carved with thorn motifs. A thin string of bells trembles as you pass. Do you cut the string or move carefully?",
-    "A stack of crates blocks a side passage, marked with the sigil of a lost order. The wood is recent, not ancient. Do you investigate or stay the course?",
-    "You reach a crossroads where one tunnel descends with a steady drip, and the other rises toward a warm glow. The air shifts between cold and hot with each breath. Which way do you go?",
-    "A circle of candles burns without flame, casting a pale halo on the floor. Inside the circle lies a bundle wrapped in cloth. Do you step inside or leave it be?",
-    "A chasm splits the floor, and a narrow beam spans it like a balance test. On the far side, a small chest sits untouched. Do you cross or search for another route?",
-    "The stone walls here are etched with tally marks, too many to count. A fresh mark appears as you watch, as if carved by an unseen hand. Do you stay or move on?",
-    "A faint melody plays from a corridor filled with drifting dust motes. The music is slow and unfamiliar, yet it pulls at your memory. Do you follow it or resist?",
-    "A rusted suit of armor slumps against the wall, its helm turned toward you. As you approach, a loose gauntlet slides across the floor. Do you take it or step back?",
-    "A narrow stairwell spirals down, each step damp and slick. At the bottom, a single candle burns green. Do you descend or wait for a sign?",
-    "A heavy door stands ajar, warm air spilling out with the scent of spice and smoke. Shadows flicker beyond, though no fire is visible. Do you enter or shut it?",
-    "A rope bridge sways over a void, its boards creaking softly. Someone has tied a fresh knot at the far end. Do you cross or examine the knot?",
-    "A stone basin in the floor fills itself drop by drop, then drains just as quickly. The water leaves no mark. Do you test it or move on?",
-    "A narrow vent exhales a steady stream of hot air, making your cloak billow. The metal grate rattles when you lean near it. Do you open it or avoid it?",
-    "The passage is lined with faded banners, each stitched with a different crest. One banner is new and bright. Do you inspect it or keep moving?",
-    "A dozen iron keys hang from hooks on the wall, all slightly warm to the touch. The door beside them has no handle. Do you choose a key or search for another path?",
-    "A trail of wax leads to a candle that burns with a blue flame. The wax forms a circle that you have not crossed yet. Do you step inside or snuff the flame?",
-    "A pile of bones blocks the next corridor, arranged like a warning. One skull is freshly cracked. Do you clear the pile or retreat?",
-    "The floor here is covered in fine white sand, and a single set of footprints leads in but not out. A distant click echoes from the dark. Do you follow the tracks or set a trap?",
-    "A metal door hums with a low vibration, and tiny sparks dance across its surface. A lever nearby is set to the middle position. Do you pull it or leave it?",
-    "A ruined chapel opens into a vaulted chamber where moonlight filters from above. In the center, a stone sarcophagus is cracked open. Do you approach or search the room first?",
+INTRO_FALLBACKS_PATH = Path(__file__).resolve().parent / "intro_fallbacks.json"
+INTRO_FALLBACKS_DEFAULT = [
+    "A rusted gate groans at the mouth of a collapsed crypt. A lone lantern flickers as if waiting. Do you enter or scout?",
+    "Rain drums hard beside a stairwell of wet stone. A faint blue glow leaks from a seam. Do you touch it or back away?",
+    "The ground trembles over a pit that exhales warm air. Fresh footprints vanish into the dark. Do you follow or listen?",
+    "A cracked bell tolls once under a ceiling of cracked tiles. The air smells of iron and smoke. Do you descend or search?",
+    "Cold wind pushes through a tunnel lined with broken banners. A soft scraping answers your step. Do you press on or hold?",
 ]
 
+def load_intro_fallbacks() -> List[str]:
+    try:
+        raw = INTRO_FALLBACKS_PATH.read_text(encoding="ascii")
+        data = json.loads(raw)
+        if isinstance(data, list):
+            cleaned = [str(item).strip() for item in data if str(item).strip()]
+            if cleaned:
+                return cleaned
+    except Exception:
+        logger.exception("Failed to load intro fallbacks")
+    return INTRO_FALLBACKS_DEFAULT
+
+INTRO_FALLBACKS = load_intro_fallbacks()
+
 def pick_intro_fallback() -> str:
-    return random.choice(INTRO_FALLBACKS)
+    return random.choice(INTRO_FALLBACKS or INTRO_FALLBACKS_DEFAULT)
 
 def count_words(text: str) -> int:
     return len([part for part in text.strip().split() if part])
