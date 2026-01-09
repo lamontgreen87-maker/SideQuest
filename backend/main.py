@@ -13,6 +13,10 @@ from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
 import httpx
 from eth_account import Account
 from eth_account.messages import encode_defunct
+try:
+    from eth_account.messages import encode_structured_data
+except ImportError:  # eth_account >= 0.9 uses encode_typed_data
+    from eth_account.messages import encode_typed_data as encode_structured_data
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -199,6 +203,10 @@ class SendMessageRequest(BaseModel):
     message: str
     fast: Optional[bool] = None
 
+
+class ContinueRequest(BaseModel):
+    fast: Optional[bool] = None
+
 class SendMessageResponse(BaseModel):
     response: str
     session_id: str
@@ -363,6 +371,7 @@ class WalletNonceResponse(BaseModel):
 class WalletVerifyRequest(BaseModel):
     address: str
     signature: str
+    typed_data: Optional[Dict[str, Any]] = None
 
 class AuthResponse(BaseModel):
     token: str
@@ -1369,6 +1378,24 @@ def get_last_assistant_message(messages: List[Dict[str, str]]) -> str:
             return message.get("content", "")
     return ""
 
+
+def get_last_turn_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    last_user_index = None
+    last_assistant_index = None
+    for index in range(len(messages) - 1, -1, -1):
+        role = messages[index].get("role")
+        if last_user_index is None and role == "user":
+            last_user_index = index
+        if last_assistant_index is None and role == "assistant":
+            last_assistant_index = index
+        if last_user_index is not None and last_assistant_index is not None:
+            break
+    indices = [idx for idx in (last_user_index, last_assistant_index) if idx is not None]
+    if not indices:
+        return []
+    indices.sort()
+    return [messages[idx] for idx in indices]
+
 def last_assistant_asked_question(messages: List[Dict[str, str]]) -> bool:
     last = get_last_assistant_message(messages)
     return "?" in last if last else False
@@ -1651,6 +1678,24 @@ def count_words(text: str) -> int:
 def ends_with_sentence(text: str) -> bool:
     return text.strip().endswith((".", "!", "?"))
 
+
+def has_action_prompt(text: str) -> bool:
+    cleaned = str(text or "").strip().lower()
+    if not cleaned:
+        return False
+    if "?" in cleaned:
+        return True
+    triggers = [
+        "what do you do",
+        "what do you do next",
+        "what happens next",
+        "how do you respond",
+        "your move",
+        "your turn",
+        "next move",
+    ]
+    return any(trigger in cleaned for trigger in triggers)
+
 async def generate_nonempty_response(messages: List[Dict[str, str]], fast: bool) -> str:
     response_text = strip_thoughts((await ollama_chat(messages, fast)).strip())
     if response_text:
@@ -1887,7 +1932,16 @@ async def wallet_verify(payload: WalletVerifyRequest):
         raise HTTPException(status_code=400, detail="Nonce not found")
     message = build_wallet_message(address, entry.get("nonce", ""))
     try:
-        recovered = Account.recover_message(encode_defunct(text=message), signature=signature)
+        if payload.typed_data:
+            typed_message = payload.typed_data.get("message", {}).get("contents", "")
+            if typed_message != message:
+                raise HTTPException(status_code=400, detail="Signature payload mismatch")
+            recovered = Account.recover_message(
+                encode_structured_data(payload.typed_data),
+                signature=signature,
+            )
+        else:
+            recovered = Account.recover_message(encode_defunct(text=message), signature=signature)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid signature") from exc
     if normalize_wallet(recovered) != address:
@@ -2142,7 +2196,7 @@ async def send_message(
             response_text = clerk_result.get("player_reply") or "Noted."
         else:
             history = [msg for msg in session["messages"] if msg.get("role") != "system"]
-            tail = history[-5:] if history else []
+            tail = get_last_turn_messages(history)
             model_messages = [
                 {
                     "role": "system",
@@ -2208,8 +2262,88 @@ async def send_message(
     else:
         session["messages"].append({"role": "assistant", "content": response_text})
         session["last_assistant_message"] = response_text
+    if not has_action_prompt(session["last_assistant_message"]):
+        follow_up = "What do you do next?"
+        session["messages"].append({"role": "assistant", "content": follow_up})
+        session["last_assistant_message"] = follow_up
+        if response_parts:
+            response_parts = [*response_parts, follow_up]
+        else:
+            response_parts = [response_text, follow_up]
     if should_narrate and session["game_state"].get("loot_pending"):
         session["game_state"]["loot_pending"] = []
+    session["pending_reply"] = False
+    session["last_assistant_at"] = stamp_now()
+    user["credits"] = max(0, int(user.get("credits", 0)) - 1)
+    save_simple_store(USERS_STORE_PATH, users_store)
+    persist_sessions()
+    return SendMessageResponse(
+        response=response_text,
+        session_id=session_id,
+        response_parts=response_parts,
+        game_state=session.get("game_state"),
+    )
+
+
+@app.post(
+    "/api/sessions/{session_id}/continue",
+    response_model=SendMessageResponse,
+    dependencies=[Depends(verify_api_key)],
+)
+async def continue_message(
+    session_id: str,
+    payload: ContinueRequest,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    session = get_session_or_404(session_id)
+    if user.get("credits", 0) <= 0:
+        raise HTTPException(status_code=402, detail="Out of credits")
+    ensure_session_state(session)
+    session["pending_reply"] = True
+    session["last_user_at"] = stamp_now()
+    fast = bool(payload.fast)
+    world_state = ensure_world_state(session_id)
+    try:
+        history = [msg for msg in session["messages"] if msg.get("role") != "system"]
+        tail = get_last_turn_messages(history)
+        model_messages = [
+            {"role": "system", "content": build_story_system_prompt(session["game_state"], world_state)},
+            *tail,
+        ]
+        continue_messages = build_continue_messages(build_avoid_repeat_messages(model_messages))
+        response_text = await generate_min_response(continue_messages, fast, 28)
+        last_assistant = get_last_assistant_message(session["messages"])
+        if last_assistant and response_text.strip() == last_assistant.strip():
+            retry_context = build_avoid_repeat_messages(without_last_assistant(model_messages))
+            response_text = await generate_min_response(
+                build_continue_messages(retry_context), fast, 28
+            )
+            if response_text.strip() == last_assistant.strip():
+                response_text = fallback_reply(model_messages)
+        if response_text and not ends_with_sentence(response_text):
+            continuation = await generate_min_response(
+                build_continue_messages(model_messages), fast, 14
+            )
+            if continuation:
+                response_text = (response_text + " " + continuation).strip()
+        response_text, hint = split_narration_hint(response_text)
+        if hint:
+            session["game_state"]["narration_hint"] = hint
+        response_text = await clerk_filter_story(session["game_state"], world_state, response_text)
+        response_text = strip_state_leaks(response_text, session["game_state"], world_state)
+    except httpx.TimeoutException:
+        response_text = fallback_reply(session["messages"])
+        logger.warning("Ollama timeout for session %s", session_id)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Ollama error: {exc}") from exc
+    session["messages"].append({"role": "assistant", "content": response_text})
+    session["last_assistant_message"] = response_text
+    response_parts = None
+    if not has_action_prompt(session["last_assistant_message"]):
+        follow_up = "What do you do next?"
+        session["messages"].append({"role": "assistant", "content": follow_up})
+        session["last_assistant_message"] = follow_up
+        response_parts = [response_text, follow_up]
     session["pending_reply"] = False
     session["last_assistant_at"] = stamp_now()
     user["credits"] = max(0, int(user.get("credits", 0)) - 1)

@@ -37,6 +37,61 @@ const LOADING_FLAVOR = [
   "folding secret maps",
   "counting torchwick",
   "whispering to ravens",
+  "tuning crystal bells",
+  "teaching bats to bow",
+  "fermenting moon honey",
+  "stacking spiral stones",
+  "arguing with mushrooms",
+  "ironing a dragon's cape",
+  "resetting rune puzzles",
+  "measuring shadow lengths",
+  "inflating cloud sheep",
+  "polishing cursed spoons",
+  "sorting star feathers",
+  "bottling thunder echoes",
+  "sweeping basilisk dust",
+  "stirring a lava latte",
+  "braiding river reeds",
+  "wrangling mimic stools",
+  "counting ghost footprints",
+  "whittling luck charms",
+  "folding quiet storms",
+  "charging lantern sprites",
+  "teaching owls to whisper",
+  "sketching secret stairways",
+  "rinsing goblin tea cups",
+  "taming unruly quills",
+  "counting honest coins",
+  "sharpening moonlight",
+  "brewing moss tonic",
+  "dusting ancient sigils",
+  "knitting frost scarves",
+  "soothing angry lanterns",
+  "baking stone biscuits",
+  "polishing phantom armor",
+  "sorting spell crumbs",
+  "braiding comet tails",
+  "patching leaky portals",
+  "painting door hinges",
+  "teaching trolls manners",
+  "untangling fate threads",
+  "warming the runes",
+  "mending shadow cloaks",
+  "winding the wind-up owl",
+  "counting catacomb steps",
+  "testing trick mirrors",
+  "brewing courage stew",
+  "wrapping echo jars",
+  "sanding dragon scales",
+  "shuffling prophecy cards",
+  "harvesting glow lichen",
+  "stacking time tokens",
+  "whispering to the map",
+  "filling ink wells",
+  "aligning the ley lines",
+  "dimming the ceiling stars",
+  "straightening crooked hats",
+  "dusting the crystal ball",
 ];
 const INTRO_FALLBACKS = [
   "A lantern sputters beside a mossy stairwell that drops into a ruin no map admits. Damp air tastes of iron and old incense, and something below answers your footstep with a slow, waiting scrape. Your hand closes around a cracked stone charm that hums with a warning. Do you descend or search the threshold for a safer way in?",
@@ -330,6 +385,43 @@ export default function StoryScreen({
     [serverUrl]
   );
 
+  const withHealthGuard = useCallback(
+    (requestFn) =>
+      new Promise((resolve, reject) => {
+        let settled = false;
+        let failures = 0;
+        const interval = setInterval(async () => {
+          if (settled) return;
+          try {
+            await apiGet(serverUrl, "/health");
+            failures = 0;
+          } catch (error) {
+            failures += 1;
+            if (failures >= 3) {
+              settled = true;
+              clearInterval(interval);
+              reject(new Error("Server not reachable."));
+            }
+          }
+        }, 20000);
+
+        requestFn()
+          .then((result) => {
+            if (settled) return;
+            settled = true;
+            clearInterval(interval);
+            resolve(result);
+          })
+          .catch((error) => {
+            if (settled) return;
+            settled = true;
+            clearInterval(interval);
+            reject(error);
+          });
+      }),
+    [serverUrl]
+  );
+
   const getIntro = useCallback(
     async (name, klass) => {
       const apiIntro = sanitizeIntro(await fetchAiIntro(name, klass));
@@ -340,6 +432,9 @@ export default function StoryScreen({
   );
 
   const loadSession = useCallback(async () => {
+    if (characterEntry) {
+      return;
+    }
     if (messages.length) {
       setAdventureLoading(false);
       return;
@@ -369,7 +464,7 @@ export default function StoryScreen({
       setAdventureLoading(false);
       introRequestRef.current = { key: introKey, inFlight: false };
     }, 900);
-  }, [getIntro, makeMessage, normalizeMessages, messages.length]);
+  }, [characterEntry, getIntro, makeMessage, normalizeMessages, messages.length]);
 
   useEffect(() => {
     loadSession();
@@ -382,12 +477,12 @@ export default function StoryScreen({
   }, [messages, rulesSeeded]);
 
   useEffect(() => {
-    if (!adventureLoading) return;
+    if (!adventureLoading && !loading) return;
     const interval = setInterval(() => {
       setLoadingFlavorIndex((prev) => (prev + 1) % LOADING_FLAVOR.length);
-    }, 900);
+    }, 3000);
     return () => clearInterval(interval);
-  }, [adventureLoading]);
+  }, [adventureLoading, loading]);
 
   useEffect(() => {
     const showSub = Keyboard.addListener("keyboardDidShow", (event) => {
@@ -580,23 +675,30 @@ export default function StoryScreen({
     const trimmed = input.trim();
     const payloadMessage = trimmed || resendMessage;
     if (!payloadMessage || loading) return;
+    const isContinueCommand = payloadMessage.trim().toLowerCase() === "/continue";
     setLoading(true);
     setInput("");
     setResendReady(false);
     setResendMessage("");
-    setMessages((prev) => [...prev, makeMessage("user", payloadMessage)]);
+    if (isContinueCommand) {
+      setMessages((prev) => [...prev, makeMessage("user", "/continue")]);
+    } else {
+      setMessages((prev) => [...prev, makeMessage("user", payloadMessage)]);
+    }
     let id = null;
     try {
       id = await ensureSession();
-      const response = await Promise.race([
-        apiPost(serverUrl, `/api/sessions/${id}/messages`, {
+      const response = await withHealthGuard(() => {
+        if (isContinueCommand) {
+          return apiPost(serverUrl, `/api/sessions/${id}/continue`, {
+            fast: isRemoteServer ? true : undefined,
+          });
+        }
+        return apiPost(serverUrl, `/api/sessions/${id}/messages`, {
           message: payloadMessage,
           fast: isRemoteServer ? true : undefined,
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Request timed out")), 120000)
-        ),
-      ]);
+        });
+      });
       appendAssistantResponse(response);
       if (response?.credits && onCreditsUpdate) {
         onCreditsUpdate(response.credits);
@@ -636,19 +738,20 @@ export default function StoryScreen({
     } finally {
       setLoading(false);
     }
-  }, [
-    input,
-    loading,
-    resendMessage,
-    appendAssistantResponse,
-    ensureSession,
-    serverUrl,
-    onCreditsUpdate,
-    isRemoteServer,
-    makeMessage,
-    shouldCheckStatus,
-    pollSessionReply,
-  ]);
+    }, [
+      input,
+      loading,
+      resendMessage,
+      isRemoteServer,
+      appendAssistantResponse,
+      ensureSession,
+      serverUrl,
+      onCreditsUpdate,
+      withHealthGuard,
+      makeMessage,
+      shouldCheckStatus,
+      pollSessionReply,
+    ]);
 
   const sendActionMessage = useCallback(
     async (actionText) => {
@@ -718,23 +821,31 @@ export default function StoryScreen({
 
   useEffect(() => {
     if (!sessionId || !messages.length) return;
-    const persist = async () => {
-      const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
-      const entry = {
-        id: sessionId,
-        title: buildSessionTitle(messages),
-        preview: buildSessionPreview(messages),
-        updatedAt: Date.now(),
-        messages,
-      };
-      const next = [
-        entry,
+      const persist = async () => {
+        const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
+        const character = currentCharacter
+          ? {
+              name: currentCharacter.name || "Adventurer",
+              klass: currentCharacter.klass || "Hero",
+              level: Number(currentCharacter.level) || 1,
+            }
+          : null;
+        const entry = {
+          id: sessionId,
+          title: buildSessionTitle(messages),
+          preview: buildSessionPreview(messages),
+          updatedAt: Date.now(),
+          character,
+          messages,
+        };
+        const next = [
+          entry,
         ...storedSessions.filter((session) => session.id !== sessionId),
       ].slice(0, 20);
       await setJson(STORAGE_KEYS.sessions, next);
     };
     persist();
-  }, [sessionId, messages, buildSessionTitle, buildSessionPreview]);
+    }, [sessionId, messages, buildSessionTitle, buildSessionPreview, currentCharacter]);
 
   useEffect(() => {
     if (!sessionEntry) return;
@@ -1115,11 +1226,13 @@ export default function StoryScreen({
           keyboardShouldPersistTaps="handled"
         />
         {(loading || combatBusy || checkBusy) && !adventureLoading && (
-          <View style={styles.loadingOverlay} pointerEvents="none">
-            <ActivityIndicator size="large" color={colors.gold} />
-            <Text style={styles.loadingLabel}>The GM is thinking...</Text>
-          </View>
-        )}
+            <View style={styles.loadingOverlay} pointerEvents="none">
+              <ActivityIndicator size="large" color={colors.gold} />
+              <Text style={styles.loadingLabel}>
+                The GM is {LOADING_FLAVOR[loadingFlavorIndex]}...
+              </Text>
+            </View>
+          )}
         {adventureLoading && !loading && (
           <View style={styles.loadingOverlay} pointerEvents="none">
             <ActivityIndicator size="large" color={colors.gold} />

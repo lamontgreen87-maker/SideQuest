@@ -3,6 +3,15 @@ _apk_extract/
 _apk_extract2/
 _apk_extract.zip
 _server_zip/
+.gradle/
+sidequest-build/
+crash-log*.txt
+cloudflared*.exe
+CODEx_STATUS.txt
+gemini_context.txt
+codex_start.bat
+qc
+cd
 **/node_modules/
 **/.expo/
 **/.next/
@@ -25,4 +34,7 @@ backend/wallet_nonces.json
 backend/payments_orders.json
 backend/payments_state.json
 backend/rules_store.json
+backend/sessions_store.json
+backend/world_state_store.json
+backend/model_name.txt
 backend/cloudflared*.log

@@ -8,6 +8,7 @@ export default function HomeScreen({
   activeTab,
   onTabChange,
   headerRight,
+  headerTitle = "Side Quest",
   children,
   statusOnline = true,
   statusLabel = "Server ready",
@@ -19,7 +20,7 @@ export default function HomeScreen({
   return (
     <Screen>
       <View style={styles.header}>
-        <Text style={styles.title}>Side Quest</Text>
+        <Text style={styles.title}>{headerTitle}</Text>
         <View style={styles.headerIcons}>
           <View
             style={[
@@ -29,12 +30,12 @@ export default function HomeScreen({
           />
           {onCartPress ? (
             <Pressable style={styles.iconButton} onPress={onCartPress}>
-              <Text style={styles.iconLabel}>Cart</Text>
+              <Text style={styles.iconLabel}>🛒</Text>
             </Pressable>
           ) : null}
           {onSettingsPress ? (
             <Pressable style={styles.iconButton} onPress={onSettingsPress}>
-              <Text style={styles.iconLabel}>Settings</Text>
+              <Text style={styles.iconLabel}>⚙</Text>
             </Pressable>
           ) : null}
         </View>

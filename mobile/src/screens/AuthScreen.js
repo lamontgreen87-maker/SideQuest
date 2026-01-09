@@ -19,6 +19,7 @@ export default function AuthScreen({
   onSignIn,
   onDisconnect,
   updateStatus,
+  onResetWallet,
 }) {
   const isBusy = authStatus?.loading;
   const connectedAddress = walletStatus?.address || walletAddress;
@@ -64,6 +65,9 @@ export default function AuthScreen({
               disabled={walletConnected}
             />
             <Button label="Disconnect" onPress={onDisconnect} variant="ghost" />
+            {onResetWallet ? (
+              <Button label="Reset Wallet" onPress={onResetWallet} variant="ghost" />
+            ) : null}
           </View>
           <Text style={styles.statusMuted}>
             {connectedAddress ? `Wallet: ${connectedAddress}` : "No wallet connected"}

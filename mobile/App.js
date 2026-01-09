@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BackHandler,
+  Alert,
   Modal,
   Pressable,
   SafeAreaView,
@@ -17,6 +18,7 @@ import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import CharacterScreen from "./src/screens/CharacterScreen";
 import BestiaryScreen from "./src/screens/BestiaryScreen";
+import BuyCreditsScreen from "./src/screens/BuyCreditsScreen";
 import SpellsScreen from "./src/screens/SpellsScreen";
 import StoryScreen from "./src/screens/StoryScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
@@ -89,6 +91,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("story");
   const [creationVisible, setCreationVisible] = useState(false);
   const [sessionsVisible, setSessionsVisible] = useState(false);
+  const [buyCreditsVisible, setBuyCreditsVisible] = useState(false);
+  const [currentCharacter, setCurrentCharacter] = useState(null);
   const [sessionList, setSessionList] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [authStatus, setAuthStatus] = useState({ loading: false, error: null });
@@ -275,16 +279,65 @@ export default function App() {
         "Nonce request"
       );
       const message = noncePayload.message;
-      const signature = await withTimeout(
-        provider.request({
-          method: "personal_sign",
-          params: [message, address],
-        }),
-        20000,
-        "Wallet signature"
-      );
+      let signature = null;
+      let typedData = null;
+      try {
+        signature = await withTimeout(
+          provider.request({
+            method: "personal_sign",
+            params: [message, address],
+          }),
+          20000,
+          "Wallet signature"
+        );
+      } catch (err) {
+        try {
+          signature = await withTimeout(
+            provider.request({
+              method: "personal_sign",
+              params: [address, message],
+            }),
+            20000,
+            "Wallet signature"
+          );
+        } catch (innerErr) {
+          typedData = {
+            types: {
+              EIP712Domain: [
+                { name: "name", type: "string" },
+                { name: "version", type: "string" },
+                { name: "chainId", type: "uint256" },
+                { name: "verifyingContract", type: "address" },
+              ],
+              Signin: [{ name: "contents", type: "string" }],
+            },
+            domain: {
+              name: "Side Quest",
+              version: "1",
+              chainId: 1,
+              verifyingContract: "0x0000000000000000000000000000000000000000",
+            },
+            primaryType: "Signin",
+            message: {
+              contents: message,
+            },
+          };
+          signature = await withTimeout(
+            provider.request({
+              method: "eth_signTypedData_v4",
+              params: [address, JSON.stringify(typedData)],
+            }),
+            20000,
+            "Wallet signature"
+          );
+        }
+      }
       const authPayload = await withTimeout(
-        apiPost(serverUrl, "/api/auth/wallet/verify", { address, signature }),
+        apiPost(serverUrl, "/api/auth/wallet/verify", {
+          address,
+          signature,
+          typed_data: typedData,
+        }),
         15000,
         "Verify request"
       );
@@ -317,11 +370,44 @@ export default function App() {
     setCredits(0);
   }, [provider]);
 
+  const resetWallet = useCallback(async () => {
+    try {
+      if (provider?.signer?.client?.pairing?.getPairings) {
+        const pairings = provider.signer.client.pairing.getPairings();
+        for (const pairing of pairings) {
+          try {
+            await provider.signer.client.pairing.delete(pairing.topic, {
+              code: 6000,
+              message: "User reset wallet pairing",
+            });
+          } catch (err) {
+            // ignore pairing delete errors
+          }
+        }
+      }
+      if (provider?.disconnect) {
+        await provider.disconnect();
+      }
+    } catch (error) {
+      console.error("Wallet reset failed.", error);
+    }
+    await removeItem(STORAGE_KEYS.authToken);
+    await removeItem(STORAGE_KEYS.authWallet);
+    setToken(null);
+    setWallet(null);
+    setCredits(0);
+  }, [provider]);
+
   const headerRight = (
     <Text style={{ color: colors.mutedGold, fontSize: 12 }}>
       Credits: {credits}
     </Text>
   );
+  const headerTitle = useMemo(() => {
+    if (!currentCharacter?.name) return "Side Quest";
+    const level = Number(currentCharacter?.level) || 1;
+    return `${currentCharacter.name} Lvl ${level}`;
+  }, [currentCharacter]);
 
   const serverStatusLabel = walletStatus.healthError
     ? walletStatus.healthError
@@ -331,12 +417,13 @@ export default function App() {
   const serverOnline = !walletStatus.healthError;
   const goToSettings = useCallback(() => setActiveTab("settings"), [setActiveTab]);
   const goToBestiary = useCallback(() => setActiveTab("bestiary"), [setActiveTab]);
+  const openBuyCredits = useCallback(() => setBuyCreditsVisible(true), []);
+  const closeBuyCredits = useCallback(() => setBuyCreditsVisible(false), []);
   const openCharacterCreator = useCallback(() => setCreationVisible(true), []);
   const closeCharacterCreator = useCallback(() => setCreationVisible(false), []);
   const [pendingCharacterEntry, setPendingCharacterEntry] = useState(null);
   const [pendingSessionEntry, setPendingSessionEntry] = useState(null);
   const [resetSessionToken, setResetSessionToken] = useState(0);
-  const [currentCharacter, setCurrentCharacter] = useState(null);
   const handleCharacterCreated = useCallback(
     (character) => {
       closeCharacterCreator();
@@ -373,6 +460,30 @@ export default function App() {
     },
     [setActiveTab]
   );
+  const deleteSession = useCallback((entry) => {
+    if (!entry?.id) return;
+    Alert.alert(
+      "Delete session?",
+      "This will remove the session from your history.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const stored = await getJson(STORAGE_KEYS.sessions, []);
+            const next = stored.filter((session) => session.id !== entry.id);
+            await setJson(STORAGE_KEYS.sessions, next);
+            setSessionList(next);
+            const lastSession = await getJson(STORAGE_KEYS.lastSession, null);
+            if (lastSession === entry.id) {
+              await removeItem(STORAGE_KEYS.lastSession);
+            }
+          },
+        },
+      ]
+    );
+  }, []);
   const actionButtons = useMemo(
     () => [
       {
@@ -494,6 +605,7 @@ export default function App() {
           authStatus={authStatus}
           onSignIn={signInWithWallet}
           onDisconnect={disconnectWallet}
+          onResetWallet={resetWallet}
           updateStatus={updateStatus}
         />
         <WalletConnectModal
@@ -542,15 +654,39 @@ export default function App() {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         headerRight={headerRight}
+        headerTitle={headerTitle}
         statusOnline={serverOnline}
         statusLabel={serverStatusLabel}
         onSettingsPress={goToSettings}
-        onCartPress={goToBestiary}
+        onCartPress={openBuyCredits}
         actions={actionButtons}
         bodyStyle={activeTab === "story" ? STORY_BODY_STYLE : undefined}
       >
         {activeContent}
       </HomeScreen>
+      <Modal
+        visible={buyCreditsVisible}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        transparent={false}
+        onRequestClose={closeBuyCredits}
+      >
+        <View style={modalStyles.fullScreen}>
+          <View style={modalStyles.modalHeader}>
+            <Text style={modalStyles.modalTitle}>Buy Credits</Text>
+            <Pressable onPress={closeBuyCredits} style={modalStyles.closeButton}>
+              <Text style={modalStyles.closeLabel}>Close</Text>
+            </Pressable>
+          </View>
+          <View style={modalStyles.modalBody}>
+            <BuyCreditsScreen
+              serverUrl={serverUrl}
+              onCreditsUpdate={setCredits}
+              onOpenWallet={open}
+            />
+          </View>
+        </View>
+      </Modal>
       <Modal
         visible={sessionsVisible}
         animationType="slide"
@@ -569,24 +705,43 @@ export default function App() {
             {sessionsLoading ? (
               <Text style={modalStyles.emptyLabel}>Loading sessions...</Text>
             ) : sessionList.length ? (
-              <ScrollView contentContainerStyle={modalStyles.sessionList}>
-                {sessionList.map((session) => (
-                  <Pressable
-                    key={session.id}
-                    style={modalStyles.sessionCard}
-                    onPress={() => handleSessionSelect(session)}
-                  >
-                    <Text style={modalStyles.sessionTitle}>
-                      {session.title || "Adventure"}
-                    </Text>
-                    {session.preview ? (
-                      <Text style={modalStyles.sessionPreview}>
-                        {session.preview}
-                      </Text>
-                    ) : null}
-                    <Text style={modalStyles.sessionMeta}>
-                      {session.updatedAt
-                        ? new Date(session.updatedAt).toLocaleString()
+                <ScrollView contentContainerStyle={modalStyles.sessionList}>
+                  {sessionList.map((session) => (
+                    <Pressable
+                      key={session.id}
+                      style={modalStyles.sessionCard}
+                      onPress={() => handleSessionSelect(session)}
+                    >
+                      {(() => {
+                        const character = session.character || null;
+                        const name = character?.name;
+                        const klass = character?.klass;
+                        const level = Number(character?.level) || 1;
+                        const headerLabel = name
+                          ? `${name} | ${klass || "Hero"} | Lvl ${level}`
+                          : session.title || "Adventure";
+                        const preview = session.preview || "No recent events yet.";
+                        return (
+                          <>
+                            <View style={modalStyles.sessionHeaderRow}>
+                              <Text style={modalStyles.sessionTitle}>{headerLabel}</Text>
+                              <Pressable
+                                onPress={(event) => {
+                                  event?.stopPropagation?.();
+                                  deleteSession(session);
+                                }}
+                                style={modalStyles.sessionDelete}
+                              >
+                                <Text style={modalStyles.sessionDeleteLabel}>Delete</Text>
+                              </Pressable>
+                            </View>
+                            <Text style={modalStyles.sessionPreview}>{preview}</Text>
+                          </>
+                        );
+                      })()}
+                      <Text style={modalStyles.sessionMeta}>
+                        {session.updatedAt
+                          ? new Date(session.updatedAt).toLocaleString()
                         : "Saved"}
                     </Text>
                   </Pressable>
@@ -659,10 +814,30 @@ const modalStyles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.xs,
   },
+  sessionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
   sessionTitle: {
     color: colors.parchment,
     fontSize: 14,
     fontWeight: "700",
+    flex: 1,
+  },
+  sessionDelete: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+  },
+  sessionDeleteLabel: {
+    color: colors.mutedGold,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: "uppercase",
   },
   sessionPreview: {
     color: colors.mutedGold,

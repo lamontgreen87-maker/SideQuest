@@ -23,10 +23,21 @@ export const WALLETCONNECT_SESSION_PARAMS = {
   requiredNamespaces: {
     eip155: {
       methods: [
-        "personal_sign",
+        "eth_chainId",
+        "eth_sendTransaction",
+        "eth_signTypedData_v4",
+      ],
+      chains: ["eip155:1"],
+      events: ["chainChanged", "accountsChanged"],
+    },
+  },
+  optionalNamespaces: {
+    eip155: {
+      methods: [
         "eth_sign",
         "eth_signTypedData",
-        "eth_signTypedData_v4",
+        "wallet_switchEthereumChain",
+        "personal_sign",
       ],
       chains: ["eip155:1"],
       events: ["chainChanged", "accountsChanged"],

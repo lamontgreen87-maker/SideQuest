@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Button from "../components/Button";
 import Section from "../components/Section";
 import { apiGet } from "../api/client";
@@ -27,6 +27,7 @@ function formatList(value) {
 export default function BestiaryScreen({ serverUrl }) {
   const [monsters, setMonsters] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [query, setQuery] = useState("");
 
   const loadBestiary = useCallback(async () => {
     try {
@@ -60,21 +61,37 @@ export default function BestiaryScreen({ serverUrl }) {
     [monsters, selectedId]
   );
 
+  const filteredMonsters = useMemo(() => {
+    const trimmed = query.trim().toLowerCase();
+    if (!trimmed) return monsters;
+    return monsters.filter((monster) =>
+      String(monster.name || "").toLowerCase().includes(trimmed)
+    );
+  }, [monsters, query]);
+
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={[styles.content]}>
       <Section title="Bestiary">
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.row}>
-            {monsters.map((monster) => (
-              <Text
-                key={monster.id}
-                style={[styles.pill, monster.id === selectedId && styles.pillActive]}
-                onPress={() => setSelectedId(monster.id)}
-              >
-                {monster.name}
-              </Text>
-            ))}
-          </View>
+        <TextInput
+          placeholder="Search monsters..."
+          placeholderTextColor={colors.mutedGold}
+          value={query}
+          onChangeText={setQuery}
+          style={styles.searchInput}
+        />
+        <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
+          {filteredMonsters.map((monster) => (
+            <Text
+              key={monster.id}
+              style={[styles.listItem, monster.id === selectedId && styles.listItemActive]}
+              onPress={() => setSelectedId(monster.id)}
+            >
+              {monster.name}
+            </Text>
+          ))}
+          {!filteredMonsters.length ? (
+            <Text style={styles.muted}>No matches.</Text>
+          ) : null}
         </ScrollView>
       </Section>
 
@@ -163,24 +180,34 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
     paddingVertical: spacing.lg,
   },
-  row: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    flexWrap: "wrap",
+  searchInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.panel,
+    color: colors.parchment,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    fontSize: 12,
+    letterSpacing: 0.5,
     marginBottom: spacing.sm,
   },
-  pill: {
+  list: {
+    maxHeight: 260,
+  },
+  listItem: {
     color: colors.mutedGold,
     borderWidth: 1,
     borderColor: colors.border,
     paddingVertical: spacing.xs,
     paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
+    borderRadius: radius.md,
     fontSize: 12,
     letterSpacing: 1,
     textTransform: "uppercase",
+    marginBottom: spacing.xs,
   },
-  pillActive: {
+  listItemActive: {
     backgroundColor: colors.gold,
     color: colors.ink,
     borderColor: colors.gold,
