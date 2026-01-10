@@ -176,6 +176,20 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
             "Loot pending: describe the items listed in game_state.loot_pending. "
             "Do not invent additional items beyond that list.\n"
         )
+    locations_line = ""
+    if "locations" in world_state and world_state["locations"]:
+        locations_line = "Known Locations:\n"
+        for loc_name, loc_details in world_state["locations"].items():
+            locations_line += f"- {loc_name}: {loc_details['description']}\n"
+    staged_lore_line = ""
+    if "staged_lore" in world_state and world_state["staged_lore"]:
+        staged_lore_line = "Staged Lore (you can introduce these elements into the story):\n"
+        if "npcs" in world_state["staged_lore"]:
+            for npc in world_state["staged_lore"]["npcs"]:
+                staged_lore_line += f"- NPC: {npc['name']}, {npc['description']}\n"
+        if "locations" in world_state["staged_lore"]:
+            for loc in world_state["staged_lore"]["locations"]:
+                staged_lore_line += f"- Location: {loc['name']}, {loc['description']}\n"
     return (
         DEFAULT_SYSTEM_PROMPT
         + " Use the game state JSON below. If the state changes, reflect it. "
@@ -187,6 +201,8 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         + "unless explicitly present in the world state.\n"
         + combat_line
         + loot_line
+        + locations_line
+        + staged_lore_line
         + ("Campaign brief:\n" + campaign_summary + "\n" if campaign_summary else "")
         + ("World summary:\n" + world_summary + "\n" if world_summary else "")
         + "Game state JSON:\n"
@@ -523,6 +539,7 @@ payment_orders: Dict[str, Dict[str, Any]] = {}
 payment_state: Dict[str, Any] = {}
 payment_watcher_task: Optional[asyncio.Task] = None
 world_enhancer_task: Optional[asyncio.Task] = None
+lore_generator_task: Optional[asyncio.Task] = None
 world_state_store: Dict[str, Dict[str, Any]] = {}
 campaign_seed_locks: Dict[str, asyncio.Lock] = {}
 intro_locks: Dict[str, asyncio.Lock] = {}
@@ -1419,6 +1436,8 @@ def ensure_world_state(session_id: str) -> Dict[str, Any]:
         existing["next_encounter_setup_pending"] = False
     if "next_encounter_setup_at" not in existing:
         existing["next_encounter_setup_at"] = None
+    if "staged_lore" not in existing:
+        existing["staged_lore"] = {}
     return existing
 
 def apply_world_updates(world_state: Dict[str, Any], updates: List[str]) -> Dict[str, Any]:
@@ -1517,8 +1536,8 @@ def build_ollama_options(fast: bool) -> Dict[str, Any]:
         }
     return {
         **base,
-        "num_predict": 260,
-        "temperature": 0.8,
+        "num_predict": 360,
+        "temperature": 0.9,
     }
 
 def get_rules_session_or_404(session_id: str) -> RulesSession:
@@ -1818,7 +1837,8 @@ def build_clerk_messages(
                 "Do not narrate. Output only JSON with keys: should_narrate (boolean), "
                 "state (object), story_input (string), player_reply (string), world_updates (array), "
                 "world_summary (string), inventory_add (array), inventory_remove (array), "
-                "action_type (string). "
+                "action_type (string), new_locations (array of strings), new_npcs (array of strings), "
+                "used_staged_lore (array of strings). "
                 "story_input should be the player's message cleaned to only story actions. "
                 "If should_narrate is false, player_reply should be a brief non-narrative ack. "
                 "action_type should be 'equip' only for equipping items; otherwise use 'narrate'. "
@@ -1826,6 +1846,8 @@ def build_clerk_messages(
                 "world_summary should be a concise 1-3 sentence rolling summary of the story so far. "
                 "inventory_add should list newly discovered loot items to add to inventory. "
                 "inventory_remove should list items that are consumed or removed. "
+                "new_locations should list any new and significant locations mentioned in the story. "
+                "used_staged_lore should list the names of any NPCs or locations from the 'staged_lore' that were used in the story. "
                 "Make leveling part of your GM goals: aim for progression from level 1 to level 5 "
                 "in about 2 hours of play (roughly ~5 encounters). When a milestone is reached, "
                 "update state.character.level and add a world_update like 'Level up: <name> is now level X.'"
@@ -1900,6 +1922,52 @@ async def clerk_update_state(
         inventory = [item for item in inventory if item not in set(inventory_remove)]
     next_state["inventory"] = inventory
     next_state["loot_pending"] = inventory_add
+
+    used_staged_lore = payload.get("used_staged_lore") if isinstance(payload.get("used_staged_lore"), list) else []
+    if used_staged_lore:
+        if "staged_lore" in world_state:
+            if "npcs" in world_state["staged_lore"]:
+                for npc_name in used_staged_lore:
+                    for i, npc in enumerate(world_state["staged_lore"]["npcs"]):
+                        if npc["name"] == npc_name:
+                            if "npcs" not in world_state:
+                                world_state["npcs"] = {}
+                            world_state["npcs"][npc_name] = npc
+                            del world_state["staged_lore"]["npcs"][i]
+                            break
+            if "locations" in world_state["staged_lore"]:
+                for loc_name in used_staged_lore:
+                    for i, loc in enumerate(world_state["staged_lore"]["locations"]):
+                        if loc["name"] == loc_name:
+                            if "locations" not in world_state:
+                                world_state["locations"] = {}
+                            world_state["locations"][loc_name] = loc
+                            del world_state["staged_lore"]["locations"][i]
+                            break
+
+    new_locations = payload.get("new_locations") if isinstance(payload.get("new_locations"), list) else []
+    if new_locations:
+        if "locations" not in world_state:
+            world_state["locations"] = {}
+        for location_name in new_locations:
+            if location_name not in world_state["locations"]:
+                async def _background_task(loc_name):
+                    details = await _build_location_details(loc_name, world_state)
+                    if details:
+                        # Re-fetch world_state to avoid race conditions
+                        current_world_state = ensure_world_state(session_id)
+                        if "locations" not in current_world_state:
+                            current_world_state["locations"] = {}
+                        current_world_state["locations"][loc_name] = {
+                            "description": details,
+                            "created_at": stamp_now(),
+                        }
+                        world_state_store[session_id] = current_world_state
+                        persist_world_state()
+                        log_clerk_event(f"location_details added for {loc_name} in session {session_id}")
+
+                asyncio.create_task(_background_task(location_name))
+
     updated_world, encounter = maybe_trigger_encounter(next_state, world_state)
     result = {
         "should_narrate": bool(payload.get("should_narrate", True)),
@@ -2210,6 +2278,124 @@ async def _build_world_enhancement(world_state: Dict[str, Any]) -> str:
     return text
 
 
+async def _generate_random_npc_name() -> str:
+    prompt = "Generate a random, interesting name for a fantasy character."
+    try:
+        name = await ollama_generate(prompt, fast=True)
+        return name.strip()
+    except httpx.HTTPError:
+        return "a mysterious stranger"
+
+async def _generate_random_location_name() -> str:
+    prompt = "Generate a random, evocative name for a fantasy location."
+    try:
+        name = await ollama_generate(prompt, fast=True)
+        return name.strip()
+    except httpx.HTTPError:
+        return "a hidden place"
+
+async def lore_generator_loop() -> None:
+    while True:
+        await asyncio.sleep(600)  # Generate lore every 10 minutes
+        log_clerk_event("lore_generator running")
+        for session_id in list(sessions.keys()):
+            try:
+                session = sessions.get(session_id)
+                if not session:
+                    continue
+
+                # Check if session is active
+                last_user_at_str = session.get("last_user_at")
+                if last_user_at_str:
+                    last_user_at = datetime.fromisoformat(last_user_at_str)
+                    if (datetime.utcnow() - last_user_at).total_seconds() > 1800:  # 30 minutes
+                        continue
+
+                world_state = ensure_world_state(session_id)
+                
+                # Randomly decide to generate a new NPC or Location
+                if random.random() < 0.5:
+                    # Generate NPC
+                    npc_name = await _generate_random_npc_name()
+                    new_npc = await _build_npc_details(npc_name, world_state)
+                    if new_npc:
+                        if "staged_lore" not in world_state:
+                            world_state["staged_lore"] = {}
+                        if "npcs" not in world_state["staged_lore"]:
+                            world_state["staged_lore"]["npcs"] = []
+                        world_state["staged_lore"]["npcs"].append({"name": npc_name, "description": new_npc})
+                        world_state_store[session_id] = world_state
+                        persist_world_state()
+                        log_clerk_event(f"lore_generator added NPC to session {session_id}")
+                else:
+                    # Generate Location
+                    location_name = await _generate_random_location_name()
+                    new_location = await _build_location_details(location_name, world_state)
+                    if new_location:
+                        if "staged_lore" not in world_state:
+                            world_state["staged_lore"] = {}
+                        if "locations" not in world_state["staged_lore"]:
+                            world_state["staged_lore"]["locations"] = []
+                        world_state["staged_lore"]["locations"].append({"name": location_name, "description": new_location})
+                        world_state_store[session_id] = world_state
+                        persist_world_state()
+                        log_clerk_event(f"lore_generator added location to session {session_id}")
+
+            except Exception as exc:
+                logger.warning(f"Lore generator error for session {session_id}: {exc}")
+
+
+async def lore_generator_loop() -> None:
+    while True:
+        await asyncio.sleep(600)  # Generate lore every 10 minutes
+        log_clerk_event("lore_generator running")
+        for session_id in list(sessions.keys()):
+            try:
+                session = sessions.get(session_id)
+                if not session:
+                    continue
+
+                # Check if session is active
+                last_user_at_str = session.get("last_user_at")
+                if last_user_at_str:
+                    last_user_at = datetime.fromisoformat(last_user_at_str)
+                    if (datetime.utcnow() - last_user_at).total_seconds() > 1800:  # 30 minutes
+                        continue
+
+                world_state = ensure_world_state(session_id)
+                
+                # Randomly decide to generate a new NPC or Location
+                if random.random() < 0.5:
+                    # Generate NPC
+                    npc_name = "a mysterious stranger" # This can be made more dynamic
+                    new_npc = await _build_npc_details(npc_name, world_state)
+                    if new_npc:
+                        if "staged_lore" not in world_state:
+                            world_state["staged_lore"] = {}
+                        if "npcs" not in world_state["staged_lore"]:
+                            world_state["staged_lore"]["npcs"] = []
+                        world_state["staged_lore"]["npcs"].append({"name": npc_name, "description": new_npc})
+                        world_state_store[session_id] = world_state
+                        persist_world_state()
+                        log_clerk_event(f"lore_generator added NPC to session {session_id}")
+                else:
+                    # Generate Location
+                    location_name = "a hidden place" # This can be made more dynamic
+                    new_location = await _build_location_details(location_name, world_state)
+                    if new_location:
+                        if "staged_lore" not in world_state:
+                            world_state["staged_lore"] = {}
+                        if "locations" not in world_state["staged_lore"]:
+                            world_state["staged_lore"]["locations"] = []
+                        world_state["staged_lore"]["locations"].append({"name": location_name, "description": new_location})
+                        world_state_store[session_id] = world_state
+                        persist_world_state()
+                        log_clerk_event(f"lore_generator added location to session {session_id}")
+
+            except Exception as exc:
+                logger.warning(f"Lore generator error for session {session_id}: {exc}")
+
+
 async def world_enhancer_loop() -> None:
     while True:
         await asyncio.sleep(300)
@@ -2237,6 +2423,112 @@ async def world_enhancer_loop() -> None:
                     log_clerk_event(f"world_enhancement added event to session {session_id}")
             except Exception as exc:
                 logger.warning(f"World enhancer error for session {session_id}: {exc}")
+
+
+async def _build_location_details(location_name: str, world_state: Dict[str, Any]) -> str:
+    world_summary = str(world_state.get("summary") or "").strip()
+    campaign_summary = ""
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict):
+        campaign_summary = str(campaign.get("summary") or "").strip()
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a master storyteller and world-builder. "
+                "Your task is to create a rich and detailed description for a new location."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Current campaign brief:\n"
+                f"{campaign_summary or 'None'}\n\n"
+                "Current world summary:\n"
+                f"{world_summary or 'None'}\n\n"
+                f"Location Name: {location_name}\n\n"
+                "Instructions:\n"
+                "- Generate a 3-5 sentence description of the location's history, appearance, and notable features.\n"
+                "- Include sensory details: What does it smell like? What sounds can be heard? What is the lighting like?\n"
+                "- Include a secret about the location that the players can discover.\n"
+                "- Suggest a potential NPC that can be found at this location.\n"
+                "- The description should be evocative and provide hooks for future adventures.\n"
+                "- Output only the description of the location.\n"
+            ),
+        },
+    ]
+    try:
+        text = strip_thoughts(
+            (
+                await asyncio.wait_for(
+                    ollama_chat_with_model(
+                        messages,
+                        fast=False,  # Use the better model for this creative task
+                        model_name=HEAVY_MODEL_NAME,
+                        fallback_model=HEAVY_FALLBACK_MODEL,
+                    ),
+                    timeout=60,
+                )
+            ).strip()
+        )
+    except asyncio.TimeoutError:
+        log_clerk_event(f"location_details timeout for {location_name}")
+        return ""
+    return text
+
+
+async def _build_npc_details(npc_name: str, world_state: Dict[str, Any]) -> str:
+    world_summary = str(world_state.get("summary") or "").strip()
+    campaign_summary = ""
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict):
+        campaign_summary = str(campaign.get("summary") or "").strip()
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a master storyteller and world-builder. "
+                "Your task is to create a rich and detailed description for a new non-player character (NPC)."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Current campaign brief:\n"
+                f"{campaign_summary or 'None'}\n\n"
+                "Current world summary:\n"
+                f"{world_summary or 'None'}\n\n"
+                f"NPC Name: {npc_name}\n\n"
+                "Instructions:\n"
+                "- Generate a 3-5 sentence description of the NPC's backstory, motivations, and a secret.\n"
+                "- Describe the NPC's appearance and mannerisms.\n"
+                "- Provide a memorable quote from the NPC.\n"
+                "- Describe the NPC's relationship to the factions in the world.\n"
+                "- The description should be evocative and provide hooks for future adventures and roleplaying.\n"
+                "- Output only the description of the NPC.\n"
+            ),
+        },
+    ]
+    try:
+        text = strip_thoughts(
+            (
+                await asyncio.wait_for(
+                    ollama_chat_with_model(
+                        messages,
+                        fast=False,  # Use the better model for this creative task
+                        model_name=HEAVY_MODEL_NAME,
+                        fallback_model=HEAVY_FALLBACK_MODEL,
+                    ),
+                    timeout=60,
+                )
+            ).strip()
+        )
+    except asyncio.TimeoutError:
+        log_clerk_event(f"npc_details timeout for {npc_name}")
+        return ""
+    return text
 
 async def generate_intro_story(
     state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str
@@ -2698,7 +2990,7 @@ async def startup_load_rules():
     custom_bestiary = load_json_store(BESTIARY_CUSTOM_PATH, "monsters")
     bestiary_srd = load_bestiary_srd()
     spells_srd = load_spells_srd()
-    global users_store, login_codes, redeem_codes, wallet_nonces, payment_orders, payment_state, payment_watcher_task
+    global users_store, login_codes, redeem_codes, wallet_nonces, payment_orders, payment_state, payment_watcher_task, world_enhancer_task, lore_generator_task
     users_store = load_simple_store(USERS_STORE_PATH)
     login_codes = load_simple_store(LOGIN_CODES_PATH)
     redeem_codes = load_simple_store(REDEEM_CODES_PATH)
@@ -2715,6 +3007,10 @@ async def startup_load_rules():
         payment_watcher_task = asyncio.create_task(payment_watcher_loop())
     if world_enhancer_task is None:
         world_enhancer_task = asyncio.create_task(world_enhancer_loop())
+    if lore_generator_task is None:
+        lore_generator_task = asyncio.create_task(lore_generator_loop())
+    if lore_generator_task is None:
+        lore_generator_task = asyncio.create_task(lore_generator_loop())
 
 @app.get("/")
 async def root():

@@ -190,6 +190,10 @@ export default function StoryScreen({
   const [loading, setLoading] = useState(false);
   const [resendReady, setResendReady] = useState(false);
   const [resendMessage, setResendMessage] = useState("");
+  const [internalCharacter, setInternalCharacter] = useState(currentCharacter);
+  useEffect(() => {
+    setInternalCharacter(currentCharacter);
+  }, [currentCharacter]);
   const [pcs, setPcs] = useState([]);
   const [pcCatalog, setPcCatalog] = useState({});
   const [pcId, setPcId] = useState(null);
@@ -241,7 +245,7 @@ export default function StoryScreen({
     return [];
   }, []);
   const spellOptions = useMemo(() => {
-    const source = currentCharacter || {};
+    const source = internalCharacter || {};
     const combined = [
       ...(source.prepared_spells || []),
       ...(source.known_spells || []),
@@ -249,7 +253,7 @@ export default function StoryScreen({
     ];
     const unique = [...new Set(combined.map((entry) => String(entry).trim()).filter(Boolean))];
     return unique;
-  }, [currentCharacter]);
+  }, [internalCharacter]);
   const combinedSpellOptions = useMemo(
     () => (spellOptions.length ? spellOptions : spellMenuOptions),
     [spellOptions, spellMenuOptions]
@@ -625,11 +629,11 @@ export default function StoryScreen({
   }, [loadCombatCatalogs]);
 
   useEffect(() => {
-    if (currentCharacter?.id) {
-      setPcId(currentCharacter.id);
+    if (internalCharacter?.id) {
+      setPcId(internalCharacter.id);
       setRulesSessionId(null);
     }
-  }, [currentCharacter]);
+  }, [internalCharacter]);
 
   const createRulesSession = useCallback(
     async (announce = false, overrideEnemyId = null) => {
@@ -885,8 +889,8 @@ export default function StoryScreen({
 
   const listRef = useRef(null);
   const data = useMemo(
-    () => messages.map((msg, index) => ({ id: msg.id ?? `${index}`, ...msg })),
-    [messages]
+    () => messages.map((msg) => ({ id: msg.id ?? makeId(), ...msg })),
+    [messages, makeId]
   );
 
   useEffect(() => {
@@ -928,11 +932,11 @@ export default function StoryScreen({
     if (!sessionId || !messages.length) return;
       const persist = async () => {
         const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
-        const character = currentCharacter
+        const character = internalCharacter
           ? {
-              name: currentCharacter.name || "Adventurer",
-              klass: currentCharacter.klass || "Hero",
-              level: Number(currentCharacter.level) || 1,
+              name: internalCharacter.name || "Adventurer",
+              klass: internalCharacter.klass || "Hero",
+              level: Number(internalCharacter.level) || 1,
             }
           : null;
         const entry = {
@@ -950,7 +954,7 @@ export default function StoryScreen({
       await setJson(STORAGE_KEYS.sessions, next);
     };
     persist();
-    }, [sessionId, messages, buildSessionTitle, buildSessionPreview, currentCharacter]);
+    }, [sessionId, messages, buildSessionTitle, buildSessionPreview, internalCharacter]);
 
   useEffect(() => {
     if (!sessionEntry) return;
@@ -959,13 +963,16 @@ export default function StoryScreen({
       setSessionId(sessionEntry.id);
       setJson(STORAGE_KEYS.lastSession, sessionEntry.id);
     }
+    if (sessionEntry.character) {
+      setInternalCharacter(sessionEntry.character);
+    }
     if (entryMessages.length) {
       setMessages(normalizeMessages(entryMessages));
       setRulesSeeded(true);
       setAdventureLoading(false);
     }
     onSessionEntryHandled?.();
-  }, [sessionEntry, onSessionEntryHandled]);
+  }, [sessionEntry, onSessionEntryHandled, normalizeMessages]);
 
   useEffect(() => {
     ensureSessionRef.current = ensureSession;
@@ -1241,7 +1248,7 @@ export default function StoryScreen({
   );
 
   const loadClassSpells = useCallback(async () => {
-    const klass = currentCharacter?.klass;
+    const klass = internalCharacter?.klass;
     if (!klass) return;
     setSpellMenuLoading(true);
     try {
@@ -1289,7 +1296,7 @@ export default function StoryScreen({
     } finally {
       setSpellMenuLoading(false);
     }
-  }, [currentCharacter, serverUrl, normalizeSpellClasses, normalizeSpellKey]);
+  }, [internalCharacter, serverUrl, normalizeSpellClasses, normalizeSpellKey]);
 
   useEffect(() => {
     if (!showSpellMenu) return;

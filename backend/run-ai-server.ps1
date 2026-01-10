@@ -20,6 +20,7 @@ if (-not $env:MODEL_FALLBACK) { $env:MODEL_FALLBACK = "qwen3:8b" }
 if (-not $env:MODEL_CLERK) { $env:MODEL_CLERK = "qwen2.5:1.5b" }
 if (-not $env:MODEL_CLERK_FALLBACK) { $env:MODEL_CLERK_FALLBACK = $env:MODEL_NAME }
 if (-not $env:CLERK_LOG_PATH) { $env:CLERK_LOG_PATH = (Join-Path $env:LOCALAPPDATA "SideQuest\clerk.log") }
+if (Test-Path $env:CLERK_LOG_PATH) { Clear-Content -Path $env:CLERK_LOG_PATH }
 if (-not $env:CORS_ORIGINS) { $env:CORS_ORIGINS = "*" }
 if (-not $env:GOOGLE_CLIENT_ID) { $env:GOOGLE_CLIENT_ID = "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com" }
 if (-not $env:POLYGON_RPC_URL) { $env:POLYGON_RPC_URL = "https://eth.llamarpc.com" }
@@ -237,4 +238,3 @@ try {
     Add-Content -Path $stderrPath -Value ("[{0}] Start-Process failed: {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $_.Exception.Message)
     throw
 }
-
