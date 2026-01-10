@@ -4020,6 +4020,49 @@
       "skill_proficiencies": [],
       "conditions": [],
       "items": []
+    },
+    "f0186746-243a-4c7c-80f2-301f6a8438ff": {
+      "name": "Jggug",
+      "class": "Wizard",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Quarterstaff",
+          "attack_ability": "str",
+          "damage": "1d6+3",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "race": "Human",
+      "background": "Acolyte",
+      "alignment": "Lawful Good",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "int",
+        "wis"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
     }
   }
 }

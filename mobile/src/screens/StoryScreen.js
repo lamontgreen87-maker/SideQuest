@@ -947,12 +947,18 @@ export default function StoryScreen({
           character,
           messages,
         };
-        const next = [
-          entry,
-        ...storedSessions.filter((session) => session.id !== sessionId),
-      ].slice(0, 20);
-      await setJson(STORAGE_KEYS.sessions, next);
-    };
+        
+        const existingIndex = storedSessions.findIndex((session) => session.id === sessionId);
+        let next;
+        if (existingIndex !== -1) {
+          next = [...storedSessions];
+          next[existingIndex] = entry;
+        } else {
+          next = [entry, ...storedSessions];
+        }
+
+        await setJson(STORAGE_KEYS.sessions, next.slice(0, 20));
+      };
     persist();
     }, [sessionId, messages, buildSessionTitle, buildSessionPreview, internalCharacter]);
 
