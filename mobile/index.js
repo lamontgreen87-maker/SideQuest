@@ -6,7 +6,10 @@ if (!globalScope.FormData) {
 
 require("react-native-get-random-values");
 require("react-native-url-polyfill/auto");
-require("@walletconnect/react-native-compat");
+const { isPlayBuild } = require("./src/buildConfig");
+if (!isPlayBuild) {
+  require("@walletconnect/react-native-compat");
+}
 
 const { registerRootComponent } = require("expo");
 

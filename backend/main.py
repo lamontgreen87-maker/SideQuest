@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import random
@@ -17,6 +18,12 @@ try:
     from eth_account.messages import encode_structured_data
 except ImportError:  # eth_account >= 0.9 uses encode_typed_data
     from eth_account.messages import encode_typed_data as encode_structured_data
+try:
+    from google.oauth2 import id_token as google_id_token
+    from google.auth.transport import requests as google_requests
+except ImportError:
+    google_id_token = None
+    google_requests = None
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -54,6 +61,7 @@ HEAVY_MODEL_NAME = os.getenv("MODEL_HEAVY", "qwen3:8b")
 HEAVY_FALLBACK_MODEL = os.getenv("MODEL_HEAVY_FALLBACK", MODEL_NAME)
 CLERK_MODEL_NAME = os.getenv("MODEL_CLERK", "qwen2.5:1.5b")
 CLERK_FALLBACK_MODEL = os.getenv("MODEL_CLERK_FALLBACK", MODEL_NAME)
+ENCOUNTER_SETUP_TIMEOUT_SECONDS = float(os.getenv("ENCOUNTER_SETUP_TIMEOUT_SECONDS", "60"))
 CLERK_LOG_PATH = os.getenv(
     "CLERK_LOG_PATH",
     os.path.join(os.getenv("LOCALAPPDATA", os.getcwd()), "SideQuest", "clerk.log"),
@@ -70,6 +78,16 @@ PAYMENT_MAX_BLOCK_RANGE = int(os.getenv("PAYMENT_MAX_BLOCK_RANGE", "100"))
 PRICE_TABLE_JSON = os.getenv("PRICE_TABLE_JSON", "")
 PRICE_PER_CREDIT_USDT = os.getenv("PRICE_PER_CREDIT_USDT", "0.02")
 STARTING_CREDITS = max(50, int(os.getenv("STARTING_CREDITS", "50")))
+GOOGLE_CLIENT_ID = os.getenv(
+    "GOOGLE_CLIENT_ID",
+    "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com",
+)
+
+PLAY_PRODUCT_CREDITS = {
+    "credits_100": 100,
+    "credits_400": 400,
+    "credits_1000": 1000,
+}
 
 SKILL_TO_ABILITY = {
     "athletics": "str",
@@ -394,6 +412,9 @@ class WalletVerifyRequest(BaseModel):
     signature: str
     typed_data: Optional[Dict[str, Any]] = None
 
+class GoogleAuthRequest(BaseModel):
+    id_token: str
+
 class AuthResponse(BaseModel):
     token: str
     credits: int
@@ -444,6 +465,15 @@ class PaymentStatusResponse(BaseModel):
     tx_hash: Optional[str] = None
     confirmations: int = 0
 
+class PlayPurchaseRequest(BaseModel):
+    product_id: str
+    transaction_id: Optional[str] = None
+    purchase_token: Optional[str] = None
+
+class PlayPurchaseResponse(BaseModel):
+    credits: int
+    product: str
+
 sessions: Dict[str, Dict[str, Any]] = {}
 rules_sessions: Dict[str, RulesSession] = {}
 SESSIONS_STORE_PATH = os.getenv("SESSIONS_STORE_PATH", os.path.join(os.path.dirname(__file__), "sessions_store.json"))
@@ -492,9 +522,11 @@ wallet_nonces: Dict[str, Dict[str, Any]] = {}
 payment_orders: Dict[str, Dict[str, Any]] = {}
 payment_state: Dict[str, Any] = {}
 payment_watcher_task: Optional[asyncio.Task] = None
+world_enhancer_task: Optional[asyncio.Task] = None
 world_state_store: Dict[str, Dict[str, Any]] = {}
 campaign_seed_locks: Dict[str, asyncio.Lock] = {}
 intro_locks: Dict[str, asyncio.Lock] = {}
+encounter_setup_locks: Dict[str, asyncio.Lock] = {}
 
 
 def load_rules_sessions() -> None:
@@ -1147,6 +1179,10 @@ def schedule_next_encounter(world_state: Dict[str, Any], level: int) -> Dict[str
     interval_minutes = random.randint(10, 14)
     updated["next_encounter_at"] = now + (interval_minutes * 60)
     updated["next_encounter"] = select_encounter_monster(level)
+    updated["next_encounter_setup"] = ""
+    updated["next_encounter_setup_used"] = False
+    updated["next_encounter_setup_pending"] = False
+    updated["next_encounter_setup_at"] = None
     updated["updated_at"] = stamp_now()
     return updated
 
@@ -1177,6 +1213,119 @@ def maybe_trigger_encounter(
     updated = schedule_next_encounter(updated, level)
     updated["updated_at"] = stamp_now()
     return updated, encounter
+
+def build_encounter_setup_messages(
+    state: Dict[str, Any], world_state: Dict[str, Any], encounter: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    character = state.get("character") if isinstance(state.get("character"), dict) else {}
+    name = character.get("name") or "the adventurer"
+    klass = character.get("class") or "hero"
+    level = character.get("level") or 1
+    world_summary = str(world_state.get("summary") or "").strip()
+    campaign_world = str(world_state.get("campaign_world") or "").strip()
+    facts = world_state.get("facts") if isinstance(world_state.get("facts"), list) else []
+    fact_lines = "; ".join([str(item).strip() for item in facts[-6:] if str(item).strip()])
+    encounter_name = encounter.get("name") or "a threat"
+    encounter_type = encounter.get("type") or "creature"
+    encounter_cr = encounter.get("cr")
+    encounter_line = f"{encounter_name} ({encounter_type})"
+    if encounter_cr is not None:
+        encounter_line += f", CR {encounter_cr}"
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the campaign architect. Write 1-2 sentences that foreshadow "
+                "a future encounter. Keep it subtle and atmospheric. Do NOT start combat, "
+                "do NOT call it an encounter, and do NOT ask a direct question. Avoid D&D references."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Player: {name} the {klass} (level {level}).\n"
+                f"World summary: {world_summary or 'None'}\n"
+                f"Campaign world: {campaign_world or 'None'}\n"
+                f"Recent facts: {fact_lines or 'None'}\n"
+                f"Upcoming encounter: {encounter_line}\n"
+                "Write the foreshadowing now."
+            ),
+        },
+    ]
+
+async def _build_encounter_setup(
+    state: Dict[str, Any], world_state: Dict[str, Any], encounter: Dict[str, Any]
+) -> str:
+    messages = build_encounter_setup_messages(state, world_state, encounter)
+    text = strip_thoughts(
+        (await ollama_chat_with_model(
+            messages,
+            fast=True,
+            model_name=HEAVY_MODEL_NAME,
+            fallback_model=HEAVY_FALLBACK_MODEL,
+        )).strip()
+    )
+    if not text:
+        return ""
+    text = strip_state_leaks(text, state, world_state)
+    return text.strip()
+
+def kickoff_encounter_setup(
+    session_id: Optional[str], state: Dict[str, Any], world_state: Dict[str, Any]
+) -> None:
+    if not session_id:
+        return
+    if world_state.get("next_encounter_setup") or world_state.get("next_encounter_setup_pending"):
+        return
+    encounter = world_state.get("next_encounter")
+    if not isinstance(encounter, dict):
+        return
+    updated = dict(world_state)
+    updated["next_encounter_setup_pending"] = True
+    updated["updated_at"] = stamp_now()
+    world_state_store[session_id] = updated
+    persist_world_state()
+    state_snapshot = copy.deepcopy(state)
+
+    async def _background_task() -> None:
+        lock = encounter_setup_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            store_world = world_state_store.get(session_id)
+            if not isinstance(store_world, dict):
+                return
+            if store_world.get("next_encounter_setup"):
+                store_world["next_encounter_setup_pending"] = False
+                world_state_store[session_id] = store_world
+                persist_world_state()
+                return
+            encounter_payload = store_world.get("next_encounter")
+            if not isinstance(encounter_payload, dict):
+                store_world["next_encounter_setup_pending"] = False
+                world_state_store[session_id] = store_world
+                persist_world_state()
+                return
+            log_clerk_event(f"encounter_setup generating session_id={session_id}")
+            try:
+                setup = await asyncio.wait_for(
+                    _build_encounter_setup(state_snapshot, store_world, encounter_payload),
+                    timeout=ENCOUNTER_SETUP_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                log_clerk_event(f"encounter_setup timeout session_id={session_id}")
+                setup = ""
+            updated_world = dict(store_world)
+            updated_world["next_encounter_setup_pending"] = False
+            if setup:
+                updated_world["next_encounter_setup"] = setup
+                updated_world["next_encounter_setup_used"] = False
+                updated_world["next_encounter_setup_at"] = stamp_now()
+            updated_world["updated_at"] = stamp_now()
+            world_state_store[session_id] = updated_world
+            persist_world_state()
+            if setup:
+                log_clerk_event(f"encounter_setup ready session_id={session_id}")
+
+    asyncio.create_task(_background_task())
 
 def get_character_catalog() -> Dict[str, Character]:
     catalog: Dict[str, Character] = {}
@@ -1236,6 +1385,10 @@ def default_world_state() -> Dict[str, Any]:
         "next_encounter_at": None,
         "next_encounter": None,
         "last_encounter_at": None,
+        "next_encounter_setup": "",
+        "next_encounter_setup_used": False,
+        "next_encounter_setup_pending": False,
+        "next_encounter_setup_at": None,
         "updated_at": stamp_now(),
     }
 
@@ -1258,6 +1411,14 @@ def ensure_world_state(session_id: str) -> Dict[str, Any]:
         existing["next_encounter"] = None
     if "last_encounter_at" not in existing:
         existing["last_encounter_at"] = None
+    if "next_encounter_setup" not in existing:
+        existing["next_encounter_setup"] = ""
+    if "next_encounter_setup_used" not in existing:
+        existing["next_encounter_setup_used"] = False
+    if "next_encounter_setup_pending" not in existing:
+        existing["next_encounter_setup_pending"] = False
+    if "next_encounter_setup_at" not in existing:
+        existing["next_encounter_setup_at"] = None
     return existing
 
 def apply_world_updates(world_state: Dict[str, Any], updates: List[str]) -> Dict[str, Any]:
@@ -1509,12 +1670,32 @@ def get_last_assistant_message(messages: List[Dict[str, str]]) -> str:
     return ""
 
 
+def is_error_message(message: Dict[str, str]) -> bool:
+    if message.get("role") != "assistant":
+        return False
+    content = message.get("content", "").lower()
+    error_keywords = [
+        "failed",
+        "error",
+        "timeout",
+        "timed out",
+        "request failed",
+        "still thinking",
+        "check again",
+    ]
+    return any(keyword in content for keyword in error_keywords)
+
+
 def get_last_turn_messages(
     messages: List[Dict[str, str]], limit: int = 6
 ) -> List[Dict[str, str]]:
     if limit <= 0:
         return []
-    filtered = [msg for msg in messages if msg.get("role") in ("user", "assistant")]
+    filtered = [
+        msg
+        for msg in messages
+        if msg.get("role") in ("user", "assistant") and not is_error_message(msg)
+    ]
     if not filtered:
         return []
     return filtered[-limit:]
@@ -1688,7 +1869,10 @@ def build_filter_messages(state: Dict[str, Any], story_text: str) -> List[Dict[s
     ]
 
 async def clerk_update_state(
-    state: Dict[str, Any], world_state: Dict[str, Any], user_input: str
+    state: Dict[str, Any],
+    world_state: Dict[str, Any],
+    user_input: str,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     log_clerk_event("update_state started")
     messages = build_clerk_messages(state, world_state, user_input)
@@ -1729,6 +1913,13 @@ async def clerk_update_state(
     }
     if result["action_type"] != "equip":
         result["should_narrate"] = True
+    if not encounter:
+        setup = str(updated_world.get("next_encounter_setup") or "").strip()
+        if setup and not updated_world.get("next_encounter_setup_used"):
+            story_input = f"{result['story_input']} {setup}"
+            result["story_input"] = story_input.strip()
+            updated_world["next_encounter_setup_used"] = True
+            updated_world["updated_at"] = stamp_now()
     if encounter:
         encounter_name = encounter.get("name") or "a threat"
         cr_value = encounter.get("cr")
@@ -1740,6 +1931,8 @@ async def clerk_update_state(
         result["should_narrate"] = True
         result["action_type"] = "narrate"
         next_state["pending_encounter"] = encounter
+    if not encounter:
+        kickoff_encounter_setup(session_id, next_state, updated_world)
     summary = str(result["state"].get("summary", "")).strip()
     summary = summary[:160] + ("..." if len(summary) > 160 else "")
     cleaned_input = str(result["story_input"]).strip()
@@ -1964,6 +2157,86 @@ async def _build_campaign_brief_from_world(
     if not brief:
         brief = DEFAULT_CAMPAIGN_BRIEF
     return brief
+
+
+async def _build_world_enhancement(world_state: Dict[str, Any]) -> str:
+    world_summary = str(world_state.get("summary") or "").strip()
+    campaign_summary = ""
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict):
+        campaign_summary = str(campaign.get("summary") or "").strip()
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a master storyteller and world-builder. The current world state is becoming stale. "
+                "Your task is to introduce an exciting and unexpected event to make the world more dynamic and engaging."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Current campaign brief:\n"
+                f"{campaign_summary or 'None'}\n\n"
+                "Current world summary:\n"
+                f"{world_summary or 'None'}\n\n"
+                "Instructions:\n"
+                "- Generate a short (1-3 sentences) description of an exciting event, a new character, a sudden danger, or a surprising discovery.\n"
+                "- The event should be a natural but unexpected development in the current world.\n"
+                "- Do not resolve the event. Your goal is to introduce a new element for the narrator to use.\n"
+                "- Output only the description of the event.\n\n"
+                "New Event:"
+            ),
+        },
+    ]
+    try:
+        text = strip_thoughts(
+            (
+                await asyncio.wait_for(
+                    ollama_chat_with_model(
+                        messages,
+                        fast=True,
+                        model_name=HEAVY_MODEL_NAME,
+                        fallback_model=HEAVY_FALLBACK_MODEL,
+                    ),
+                    timeout=45,
+                )
+            ).strip()
+        )
+    except asyncio.TimeoutError:
+        log_clerk_event("world_enhancement timeout")
+        return ""
+    return text
+
+
+async def world_enhancer_loop() -> None:
+    while True:
+        await asyncio.sleep(300)
+        log_clerk_event("world_enhancer running")
+        for session_id in list(sessions.keys()):
+            try:
+                session = sessions.get(session_id)
+                if not session:
+                    continue
+
+                # Check if session is active
+                last_user_at_str = session.get("last_user_at")
+                if last_user_at_str:
+                    last_user_at = datetime.fromisoformat(last_user_at_str)
+                    if (datetime.utcnow() - last_user_at).total_seconds() > 1800:  # 30 minutes
+                        continue
+
+                world_state = ensure_world_state(session_id)
+                enhancement = await _build_world_enhancement(world_state)
+                if enhancement:
+                    session["messages"].append({"role": "assistant", "content": enhancement})
+                    session["last_assistant_at"] = stamp_now()
+                    session["last_assistant_message"] = enhancement
+                    persist_sessions()
+                    log_clerk_event(f"world_enhancement added event to session {session_id}")
+            except Exception as exc:
+                logger.warning(f"World enhancer error for session {session_id}: {exc}")
 
 async def generate_intro_story(
     state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str
@@ -2440,6 +2713,8 @@ async def startup_load_rules():
         wallet_nonces = {}
     if payment_watcher_task is None:
         payment_watcher_task = asyncio.create_task(payment_watcher_loop())
+    if world_enhancer_task is None:
+        world_enhancer_task = asyncio.create_task(world_enhancer_loop())
 
 @app.get("/")
 async def root():
@@ -2476,6 +2751,8 @@ async def auth_verify(payload: AuthVerifyRequest):
     user = get_or_create_user(email)
     token = str(uuid.uuid4())
     user["token"] = token
+    user["provider"] = "email"
+    user["guest"] = False
     login_codes.pop(email, None)
     save_simple_store(LOGIN_CODES_PATH, login_codes)
     save_simple_store(USERS_STORE_PATH, users_store)
@@ -2523,8 +2800,36 @@ async def wallet_verify(payload: WalletVerifyRequest):
     user = get_or_create_user_wallet(address)
     token = str(uuid.uuid4())
     user["token"] = token
+    user["provider"] = "wallet"
+    user["guest"] = False
     wallet_nonces.pop(address, None)
     save_simple_store(WALLET_NONCES_PATH, wallet_nonces)
+    save_simple_store(USERS_STORE_PATH, users_store)
+    return AuthResponse(token=token, credits=int(user.get("credits", 0)), wallet=user.get("wallet"))
+
+@app.post("/api/auth/google", response_model=AuthResponse)
+async def auth_google(payload: GoogleAuthRequest):
+    token_value = payload.id_token.strip()
+    if not token_value:
+        raise HTTPException(status_code=400, detail="Missing Google token")
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Google client not configured")
+    if google_id_token is None or google_requests is None:
+        raise HTTPException(status_code=500, detail="Google auth dependencies missing")
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            token_value, google_requests.Request(), GOOGLE_CLIENT_ID
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid Google token") from exc
+    email = normalize_email(claims.get("email") or "")
+    if not email:
+        raise HTTPException(status_code=400, detail="Google account missing email")
+    user = get_or_create_user(email)
+    token = str(uuid.uuid4())
+    user["token"] = token
+    user["provider"] = "google"
+    user["guest"] = False
     save_simple_store(USERS_STORE_PATH, users_store)
     return AuthResponse(token=token, credits=int(user.get("credits", 0)), wallet=user.get("wallet"))
 
@@ -2539,6 +2844,7 @@ async def auth_guest():
         "credits": STARTING_CREDITS,
         "token": token,
         "guest": True,
+        "provider": "guest",
     }
     save_simple_store(USERS_STORE_PATH, users_store)
     return AuthResponse(token=token, credits=int(STARTING_CREDITS), wallet=None)
@@ -2550,6 +2856,7 @@ async def get_me(user: Dict[str, Any] = Depends(require_auth)):
         "wallet": user.get("wallet"),
         "credits": int(user.get("credits", 0)),
         "guest": bool(user.get("guest")),
+        "provider": user.get("provider"),
     }
 
 @app.post("/api/redeem", response_model=RedeemResponse)
@@ -2676,6 +2983,34 @@ async def payment_status(order_id: str, user: Dict[str, Any] = Depends(require_a
         confirmations=int(order.get("confirmations", 0)),
     )
 
+@app.post("/api/payments/play", response_model=PlayPurchaseResponse)
+async def register_play_purchase(
+    payload: PlayPurchaseRequest, user: Dict[str, Any] = Depends(require_auth)
+):
+    product_id = payload.product_id
+    credits = PLAY_PRODUCT_CREDITS.get(product_id)
+    if credits is None:
+        raise HTTPException(status_code=400, detail="Unknown product")
+    user["credits"] = int(user.get("credits", 0)) + credits
+    order_id = str(uuid.uuid4())
+    payment_orders[order_id] = {
+        "id": order_id,
+        "user_id": user.get("id"),
+        "email": user.get("email"),
+        "wallet": user.get("wallet"),
+        "credits": credits,
+        "amount": payload.product_id,
+        "address": "google_play",
+        "status": "completed",
+        "created_at": stamp_now(),
+        "transaction_id": payload.transaction_id,
+        "purchase_token": payload.purchase_token,
+        "source": "play",
+    }
+    save_simple_store(USERS_STORE_PATH, users_store)
+    save_payments()
+    return PlayPurchaseResponse(credits=int(user.get("credits", 0)), product=product_id)
+
 @app.post("/api/sessions", response_model=CreateSessionResponse, dependencies=[Depends(verify_api_key)])
 async def create_session(payload: CreateSessionRequest, user: Dict[str, Any] = Depends(require_auth)):
     session_id = str(uuid.uuid4())
@@ -2742,7 +3077,9 @@ async def send_message(
     fast = bool(payload.fast)
     world_state = ensure_world_state(session_id)
     try:
-        clerk_result = await clerk_update_state(session["game_state"], world_state, payload.message)
+        clerk_result = await clerk_update_state(
+            session["game_state"], world_state, payload.message, session_id=session_id
+        )
         session["game_state"] = clerk_result["state"]
         world_state = clerk_result.get("world_state") or world_state
         world_state = apply_world_updates(world_state, clerk_result.get("world_updates") or [])

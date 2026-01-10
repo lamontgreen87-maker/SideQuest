@@ -17,11 +17,14 @@ export default function AuthScreen({
   onOpenWallet,
   authStatus,
   onSignIn,
+  onGoogleSignIn,
   onGuestSignIn,
   onDisconnect,
   updateStatus,
   onResetWallet,
   accountLabel,
+  showWalletConnect = true,
+  showGoogleSignIn = false,
 }) {
   const isBusy = authStatus?.loading;
   const connectedAddress = walletStatus?.address || walletAddress;
@@ -59,41 +62,67 @@ export default function AuthScreen({
           ) : null}
         </Section>
 
-        <Section title="Wallet">
-          <View style={styles.row}>
-            <Button
-              label={walletConnected ? "Wallet Connected" : "Connect Wallet"}
-              onPress={onOpenWallet}
-              disabled={false}
-            />
-            <Button label="Disconnect" onPress={onDisconnect} variant="ghost" />
-            {onResetWallet ? (
-              <Button label="Reset Wallet" onPress={onResetWallet} variant="ghost" />
+        {showWalletConnect ? (
+          <Section title="Wallet">
+            <View style={styles.row}>
+              <Button
+                label={walletConnected ? "Wallet Connected" : "Connect Wallet"}
+                onPress={onOpenWallet}
+                disabled={false}
+              />
+              <Button label="Disconnect" onPress={onDisconnect} variant="ghost" />
+              {onResetWallet ? (
+                <Button label="Reset Wallet" onPress={onResetWallet} variant="ghost" />
+              ) : null}
+            </View>
+            <Text style={styles.statusMuted}>
+              {connectedAddress ? `Wallet: ${connectedAddress}` : "No wallet connected"}
+            </Text>
+            <Text style={styles.statusMuted}>
+              Account: {accountLabel || "Guest"}
+            </Text>
+            <View style={styles.row}>
+              <Button
+                label={isBusy ? "Signing In..." : "Sign In"}
+                onPress={onSignIn}
+                disabled={!connectedAddress || isBusy}
+              />
+              <Button
+                label={isBusy ? "Signing In..." : "Sign In as Guest"}
+                onPress={onGuestSignIn}
+                variant="ghost"
+                disabled={isBusy}
+              />
+            </View>
+            {authStatus?.error ? (
+              <Text style={styles.statusError}>{authStatus.error}</Text>
             ) : null}
-          </View>
-          <Text style={styles.statusMuted}>
-            {connectedAddress ? `Wallet: ${connectedAddress}` : "No wallet connected"}
-          </Text>
-          <Text style={styles.statusMuted}>
-            Account: {accountLabel || "Guest"}
-          </Text>
-          <View style={styles.row}>
-            <Button
-              label={isBusy ? "Signing In..." : "Sign In"}
-              onPress={onSignIn}
-              disabled={!connectedAddress || isBusy}
-            />
-            <Button
-              label={isBusy ? "Signing In..." : "Sign In as Guest"}
-              onPress={onGuestSignIn}
-              variant="ghost"
-              disabled={isBusy}
-            />
-          </View>
-          {authStatus?.error ? (
-            <Text style={styles.statusError}>{authStatus.error}</Text>
-          ) : null}
-        </Section>
+          </Section>
+        ) : null}
+
+        {showGoogleSignIn ? (
+          <Section title="Google">
+            <View style={styles.row}>
+              <Button
+                label={isBusy ? "Signing In..." : "Sign In with Google"}
+                onPress={onGoogleSignIn}
+                disabled={isBusy}
+              />
+              <Button
+                label={isBusy ? "Signing In..." : "Sign In as Guest"}
+                onPress={onGuestSignIn}
+                variant="ghost"
+                disabled={isBusy}
+              />
+            </View>
+            <Text style={styles.statusMuted}>
+              Account: {accountLabel || "Guest"}
+            </Text>
+            {authStatus?.error ? (
+              <Text style={styles.statusError}>{authStatus.error}</Text>
+            ) : null}
+          </Section>
+        ) : null}
 
         <Section title="Updates">
           {updateStatus?.available ? (

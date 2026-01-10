@@ -1,319 +1,329 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Linking, ScrollView, Share, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
+import * as RNIap from "react-native-iap";
 import Button from "../components/Button";
-import { apiGet, apiPost } from "../api/client";
+import { apiPost } from "../api/client";
 import { colors, radius, spacing } from "../theme";
+import { isPlayBuild } from "../buildConfig";
 
-const FALLBACK_PACKS = [
-  { credits: 100, amount: "1.00" },
-  { credits: 400, amount: "4.00" },
-  { credits: 1000, amount: "10.00" },
+const PLAY_PRODUCTS = [
+  { id: "credits_100", credits: 100, label: "100 Credits", fallbackPrice: "$1.00" },
+  { id: "credits_400", credits: 400, label: "400 Credits", fallbackPrice: "$4.00" },
+  { id: "credits_1000", credits: 1000, label: "1000 Credits", fallbackPrice: "$10.00" },
 ];
 
-export default function BuyCreditsScreen({
-  serverUrl,
-  onCreditsUpdate,
-  onOpenWallet,
-}) {
-  const [packs, setPacks] = useState(FALLBACK_PACKS);
-  const [selectedPack, setSelectedPack] = useState(FALLBACK_PACKS[0]);
-  const [wallet, setWallet] = useState("");
-  const [contract, setContract] = useState("");
-  const [order, setOrder] = useState(null);
-  const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const loadPacks = useCallback(async () => {
-    setError("");
+async function safeGetProducts(productIds) {
+  if (!productIds?.length) return [];
+  if (RNIap?.fetchProducts) {
     try {
-      const payload = await apiGet(serverUrl, "/api/payments/packs");
-      if (payload?.wallet) setWallet(payload.wallet);
-      if (payload?.usdt_contract) setContract(payload.usdt_contract);
-      if (Array.isArray(payload?.packs) && payload.packs.length) {
-        setPacks(payload.packs);
-        setSelectedPack(payload.packs[0]);
-      }
-    } catch (err) {
-      setError("Failed to load packs. Using default pricing.");
+      return await RNIap.fetchProducts({ skus: productIds, type: "in-app" });
+    } catch (error) {
+      // fall through to legacy getters
     }
-  }, [serverUrl]);
+  }
+  if (!RNIap?.getProducts) return [];
+  try {
+    return await RNIap.getProducts({ skus: productIds });
+  } catch (error) {
+    try {
+      return await RNIap.getProducts(productIds);
+    } catch (innerError) {
+      return [];
+    }
+  }
+}
 
-  useEffect(() => {
-    loadPacks();
-  }, [loadPacks]);
+async function safeRequestPurchase(productId) {
+  if (!RNIap?.requestPurchase) {
+    throw new Error("Billing module not available.");
+  }
+  const request = {
+    type: "in-app",
+    request: Platform.OS === "android"
+      ? { android: { skus: [productId] } }
+      : { apple: { sku: productId } },
+  };
+  try {
+    await RNIap.requestPurchase(request);
+    return;
+  } catch (error) {
+    // Legacy fallbacks for older native builds.
+    try {
+      await RNIap.requestPurchase({ sku: productId });
+      return;
+    } catch (innerError) {
+      await RNIap.requestPurchase({ skus: [productId] });
+    }
+  }
+}
 
-  const handlePurchase = useCallback(
-    async (credits) => {
-      setBusy(true);
-      setError("");
-      setStatus("");
+export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate }) {
+  const [iapReady, setIapReady] = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [status, setStatus] = useState({ error: null, message: null });
+  const [busyProduct, setBusyProduct] = useState(null);
+  const handledTokensRef = useRef(new Set());
+  const iapModule = RNIap ?? {};
+
+  const productMap = useMemo(() => {
+    const map = new Map();
+    products.forEach((product) => map.set(product.productId, product));
+    return map;
+  }, [products]);
+
+  const refreshProducts = useCallback(async () => {
+    setLoadingProducts(true);
+    const fetched = await safeGetProducts(PLAY_PRODUCTS.map((item) => item.id));
+    if (fetched?.length) {
+      setProducts(fetched);
+    }
+    setLoadingProducts(false);
+  }, []);
+
+  const reportPurchase = useCallback(
+    async (purchase) => {
+      const productId = purchase?.productId;
+      if (!productId) return;
+      const purchaseToken = purchase?.purchaseToken || null;
+      const transactionId = purchase?.transactionId || purchase?.orderId || null;
+      const handledKey = purchaseToken || transactionId || productId;
+      if (handledTokensRef.current.has(handledKey)) return;
+      handledTokensRef.current.add(handledKey);
       try {
-        const payload = await apiPost(serverUrl, "/api/payments/create", { credits });
-        setOrder(payload);
-        setWallet(payload.address || wallet);
-        setStatus(`Order created for ${credits} credits.`);
-      } catch (err) {
-        const message = String(err?.message || "Payment failed.");
-        setError(message);
-      } finally {
-        setBusy(false);
+        const payload = await apiPost(serverUrl, "/api/payments/play", {
+          product_id: productId,
+          transaction_id: transactionId,
+          purchase_token: purchaseToken,
+        });
+        if (payload?.credits != null && onCreditsUpdate) {
+          onCreditsUpdate(payload.credits);
+        }
+        setStatus({ error: null, message: "Credits added to your account." });
+      } catch (error) {
+        handledTokensRef.current.delete(handledKey);
+        setStatus({
+          error: error?.message || "Purchase verification failed.",
+          message: null,
+        });
       }
     },
-    [serverUrl, wallet]
+    [onCreditsUpdate, serverUrl]
   );
 
-  const refreshStatus = useCallback(async () => {
-    if (!order?.order_id) {
-      setError("Create an order first to check status.");
-      return;
+  useEffect(() => {
+    if (!isPlayBuild) {
+      setStatus({
+        error: "Play Store billing is only available on the Play build.",
+        message: null,
+      });
+      return undefined;
     }
-    setBusy(true);
-    setError("");
-    try {
-      const payload = await apiGet(serverUrl, `/api/payments/status/${order.order_id}`);
-      setOrder((prev) => ({ ...prev, ...payload }));
-      setStatus(`Status: ${payload.status}`);
-      if (onCreditsUpdate) {
-        try {
-          const me = await apiGet(serverUrl, "/api/me");
-          if (typeof me?.credits === "number") {
-            onCreditsUpdate(me.credits);
-          }
-        } catch (err) {
-          // Ignore credit refresh errors so status still shows.
+    if (typeof iapModule.purchaseUpdatedListener !== "function") {
+      setStatus({
+        error: "Billing module not available. Reinstall the Play build.",
+        message: null,
+      });
+      return undefined;
+    }
+
+    let mounted = true;
+    let purchaseSub = null;
+    let errorSub = null;
+
+    const init = async () => {
+      try {
+        if (typeof iapModule.initConnection === "function") {
+          await iapModule.initConnection();
+        }
+        if (!mounted) return;
+        setIapReady(true);
+        if (Platform.OS === "android" && iapModule.flushFailedPurchasesCachedAsPendingAndroid) {
+          await iapModule.flushFailedPurchasesCachedAsPendingAndroid();
+        }
+        await refreshProducts();
+      } catch (error) {
+        if (mounted) {
+          setStatus({
+            error: error?.message || "Billing connection failed.",
+            message: null,
+          });
         }
       }
-    } catch (err) {
-      setError("Failed to check payment status.");
-    } finally {
-      setBusy(false);
-    }
-  }, [order, serverUrl, onCreditsUpdate]);
+    };
 
-  const headline = useMemo(() => {
-    if (order?.amount && order?.address) {
-      return `Send ${order.amount} USDT to the address below.`;
-    }
-    return "Select a credit pack to create a payment.";
-  }, [order]);
+    init();
 
-  const openTrustWallet = useCallback(async () => {
-    try {
-      await Linking.openURL("trust://");
-    } catch (err) {
-      setError("Open Trust Wallet failed. Please open it manually.");
-    }
-  }, []);
+    purchaseSub = iapModule.purchaseUpdatedListener(async (purchase) => {
+      await reportPurchase(purchase);
+      try {
+        if (iapModule.finishTransaction) {
+          await iapModule.finishTransaction({ purchase, isConsumable: true });
+        }
+      } catch (error) {
+        // ignore finish errors
+      } finally {
+        setBusyProduct(null);
+      }
+    });
 
-  const handleShare = useCallback(async (value, label) => {
-    if (!value) return;
-    try {
-      await Share.share({ message: String(value) });
-      setStatus(`${label} ready to copy.`);
-    } catch (err) {
-      setError("Copy failed. Long-press to select instead.");
+    if (typeof iapModule.purchaseErrorListener === "function") {
+      errorSub = iapModule.purchaseErrorListener((error) => {
+        setBusyProduct(null);
+        setStatus({
+          error: error?.message || "Purchase failed.",
+          message: null,
+        });
+      });
     }
-  }, []);
+
+    return () => {
+      mounted = false;
+      purchaseSub?.remove?.();
+      errorSub?.remove?.();
+      if (iapModule.endConnection) {
+        iapModule.endConnection();
+      }
+    };
+  }, [iapModule, refreshProducts, reportPurchase]);
+
+  const handleBuy = useCallback(
+    async (productId) => {
+      if (!iapReady) {
+        setStatus({ error: "Billing is still initializing.", message: null });
+        return;
+      }
+      setBusyProduct(productId);
+      setStatus({ error: null, message: null });
+      try {
+        await safeRequestPurchase(productId);
+      } catch (error) {
+        setBusyProduct(null);
+        setStatus({
+          error: error?.message || "Purchase failed to start.",
+          message: null,
+        });
+      }
+    },
+    [iapReady]
+  );
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Buy Credits</Text>
-      <Text style={styles.subtitle}>{headline}</Text>
-      <View style={styles.walletRow}>
-        <Text style={styles.walletLabel}>Wallet</Text>
-        <Text style={styles.walletText}>WalletConnect is optional.</Text>
-        <Text style={styles.walletText}>Use it if you want to open Trust Wallet.</Text>
-        <Button label="Open WalletConnect" onPress={onOpenWallet} variant="ghost" />
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Buy Credits</Text>
+        <Text style={styles.subtitle}>Google Play billing</Text>
       </View>
-
-      {packs.map((pack) => (
-        <View key={pack.credits} style={styles.packRow}>
-          <View style={styles.packInfo}>
-            <Text style={styles.packTitle}>{pack.credits} credits</Text>
-            <Text style={styles.packPrice}>${pack.amount}</Text>
-          </View>
-          <Button
-            label={selectedPack?.credits === pack.credits ? "Selected" : "Select"}
-            onPress={() => setSelectedPack(pack)}
-            disabled={busy}
-            variant={selectedPack?.credits === pack.credits ? "primary" : "ghost"}
-          />
-        </View>
-      ))}
-      <Button
-        label={busy ? "Confirming..." : "Confirm Buy"}
-        onPress={() => handlePurchase(selectedPack?.credits)}
-        disabled={busy || !selectedPack}
-      />
-
-      {order ? (
-        <View style={styles.orderBox}>
-          <Text style={styles.orderLabel}>Payment details</Text>
-          <View style={styles.orderRow}>
-            <Text style={styles.orderText} selectable>
-              Address: {order.address || wallet || "Unknown"}
-            </Text>
-            <Button
-              label="Copy"
-              onPress={() => handleShare(order.address, "Address")}
-              variant="ghost"
-              style={styles.iconButton}
-            />
-          </View>
-          <View style={styles.orderRow}>
-            <Text style={styles.orderText} selectable>
-              Amount: {order.amount || "-"} USDT
-            </Text>
-            <Button
-              label="Copy"
-              onPress={() => handleShare(order.amount, "Amount")}
-              variant="ghost"
-              style={styles.iconButton}
-            />
-          </View>
-          {contract ? (
-            <Text style={styles.orderText} selectable>
-              USDT Contract: {contract}
-            </Text>
-          ) : null}
-          <Text style={styles.orderHint}>Network: Ethereum Mainnet</Text>
-          <Button label="Open Wallet" onPress={openTrustWallet} variant="ghost" />
-          <Text style={styles.orderHint}>
-            Wallets often show 0 ETH for token transfers. The amount is in USDT.
-          </Text>
-          <Text style={styles.orderHint}>
-            Some wallets only show the gas fee at first. That is normal for USDT transfers.
-          </Text>
-          <Text style={styles.orderHint}>
-            Tip: press and hold the address or amount to copy.
-          </Text>
-          {status ? <Text style={styles.orderStatus}>{status}</Text> : null}
-          <Button
-            label={busy ? "Checking..." : "Check Status"}
-            onPress={refreshStatus}
-            disabled={busy}
-            variant="ghost"
-          />
+      {loadingProducts ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={colors.gold} />
+          <Text style={styles.loadingLabel}>Loading offers...</Text>
         </View>
       ) : null}
-
-      <Button
-        label={busy ? "Checking..." : "Check Status"}
-        onPress={refreshStatus}
-        disabled={busy}
-        variant="ghost"
-      />
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Text style={styles.note}>
-        Confirm Buy locks in the amount and address. Send USDT to complete the order.
-      </Text>
-    </ScrollView>
+      <View style={styles.list}>
+        {PLAY_PRODUCTS.map((item) => {
+          const product = productMap.get(item.id);
+          const price =
+            product?.localizedPrice ||
+            product?.price ||
+            product?.oneTimePurchaseOfferDetails?.formattedPrice ||
+            item.fallbackPrice;
+          return (
+            <View key={item.id} style={styles.card}>
+              <View style={styles.cardInfo}>
+                <Text style={styles.cardTitle}>{item.label}</Text>
+                <Text style={styles.cardMeta}>{price}</Text>
+              </View>
+              <Button
+                label={busyProduct === item.id ? "Processing" : "Buy"}
+                onPress={() => handleBuy(item.id)}
+                disabled={busyProduct != null}
+                style={styles.buyButton}
+              />
+            </View>
+          );
+        })}
+      </View>
+      {status.error ? <Text style={styles.error}>{status.error}</Text> : null}
+      {status.message ? <Text style={styles.success}>{status.message}</Text> : null}
+      {!isPlayBuild ? (
+        <Text style={styles.note}>Install the Play Store build to purchase credits.</Text>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: spacing.lg,
-    gap: spacing.md,
+    flex: 1,
+    paddingVertical: spacing.lg,
+  },
+  header: {
+    gap: spacing.xs,
+    marginBottom: spacing.md,
   },
   title: {
     color: colors.parchment,
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: "700",
-    letterSpacing: 1,
   },
   subtitle: {
     color: colors.mutedGold,
-    fontSize: 13,
-  },
-  packRow: {
-    width: "100%",
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.panel,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  packInfo: {
-    gap: 2,
-  },
-  packTitle: {
-    color: colors.parchment,
-    fontWeight: "700",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
     fontSize: 12,
   },
-  packPrice: {
+  loading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  loadingLabel: {
     color: colors.mutedGold,
     fontSize: 12,
   },
-  orderBox: {
-    borderWidth: 1,
-    borderColor: colors.border,
+  list: {
+    gap: spacing.md,
+  },
+  card: {
     backgroundColor: colors.panelAlt,
     borderRadius: radius.md,
-    padding: spacing.md,
-    gap: spacing.sm,
-  },
-  orderLabel: {
-    color: colors.parchment,
-    fontWeight: "700",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    fontSize: 12,
-  },
-  walletRow: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.panel,
     padding: spacing.md,
-    gap: spacing.xs,
-  },
-  walletLabel: {
-    color: colors.mutedGold,
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  walletText: {
-    color: colors.parchment,
-    fontSize: 12,
-  },
-  orderText: {
-    color: colors.parchment,
-    fontSize: 12,
-    flex: 1,
-  },
-  orderRow: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+  },
+  cardInfo: {
+    flex: 1,
     gap: spacing.xs,
   },
-  iconButton: {
-    minWidth: 36,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+  cardTitle: {
+    color: colors.parchment,
+    fontSize: 14,
+    fontWeight: "700",
   },
-  orderHint: {
+  cardMeta: {
     color: colors.mutedGold,
-    fontSize: 11,
-  },
-  orderStatus: {
-    color: colors.gold,
     fontSize: 12,
   },
+  buyButton: {
+    minWidth: 90,
+  },
   error: {
+    marginTop: spacing.md,
     color: colors.accent,
     fontSize: 12,
   },
+  success: {
+    marginTop: spacing.sm,
+    color: colors.success,
+    fontSize: 12,
+  },
   note: {
+    marginTop: spacing.md,
     color: colors.mutedGold,
-    fontSize: 11,
+    fontSize: 12,
   },
 });

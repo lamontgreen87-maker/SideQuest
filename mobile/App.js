@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from "@expo-google-fonts/cinzel";
-import { WalletConnectModal, useWalletConnectModal } from "@walletconnect/modal-react-native";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import CharacterScreen from "./src/screens/CharacterScreen";
@@ -31,6 +31,7 @@ import {
   GITHUB_RELEASES_URL,
   GITHUB_RELEASES_PAGE,
   PROD_SERVER_URL,
+  GOOGLE_WEB_CLIENT_ID,
   STORAGE_KEYS,
   WALLETCONNECT_METADATA,
   WALLETCONNECT_PROJECT_ID,
@@ -39,6 +40,13 @@ import {
 } from "./src/config";
 import { getItem, getJson, removeItem, setItem, setJson } from "./src/storage";
 import { colors, radius, spacing } from "./src/theme";
+import { isPlayBuild } from "./src/buildConfig";
+
+const walletConnectModule = isPlayBuild
+  ? null
+  : require("@walletconnect/modal-react-native");
+const useWalletConnectModal = walletConnectModule?.useWalletConnectModal;
+const WalletConnectModal = walletConnectModule?.WalletConnectModal;
 
 if (typeof BackHandler.removeEventListener !== "function") {
   BackHandler.removeEventListener = () => {};
@@ -108,7 +116,10 @@ export default function App() {
     Cinzel_400Regular,
     Cinzel_700Bold,
   });
-  const { open, provider, isConnected, address } = useWalletConnectModal();
+  const walletConnectState = useWalletConnectModal
+    ? useWalletConnectModal()
+    : { open: () => {}, provider: null, isConnected: false, address: null };
+  const { open, provider, isConnected, address } = walletConnectState;
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [token, setToken] = useState(null);
   const [wallet, setWallet] = useState(null);
@@ -218,8 +229,16 @@ export default function App() {
       try {
         const me = await apiGet(initialServerUrl, "/api/me");
         setCredits(me.credits || 0);
-        const isGuest = Boolean(me?.guest) || !me?.wallet;
-        setAccountLabel(isGuest ? "Guest" : "Wallet");
+        const provider = String(me?.provider || "").toLowerCase();
+        let label = "Account";
+        if (provider === "google") {
+          label = "Google";
+        } else if (provider === "guest" || me?.guest) {
+          label = "Guest";
+        } else if (me?.wallet) {
+          label = "Wallet";
+        }
+        setAccountLabel(label);
       } catch (error) {
         await removeItem(STORAGE_KEYS.authToken);
         await removeItem(STORAGE_KEYS.authWallet);
@@ -261,6 +280,15 @@ export default function App() {
     loadStoredState();
     checkForUpdates();
   }, [checkForUpdates, loadStoredState]);
+
+  useEffect(() => {
+    if (!isPlayBuild) return;
+    GoogleSignin.configure({
+      webClientId: GOOGLE_WEB_CLIENT_ID || undefined,
+      offlineAccess: false,
+      forceCodeForRefreshToken: false,
+    });
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -504,6 +532,45 @@ export default function App() {
     }
   }, [address, provider, serverUrl]);
 
+  const signInWithGoogle = useCallback(async () => {
+    if (!isPlayBuild) {
+      setAuthStatus({ loading: false, error: "Google sign-in unavailable." });
+      return;
+    }
+    setAuthStatus({ loading: true, error: null });
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const userInfo = await GoogleSignin.signIn();
+      const tokens = await GoogleSignin.getTokens();
+      const idToken = tokens?.idToken || userInfo?.idToken;
+      if (!idToken) {
+        throw new Error("Missing Google ID token.");
+      }
+      const authPayload = await withTimeout(
+        apiPost(serverUrl, "/api/auth/google", { id_token: idToken }),
+        15000,
+        "Google sign-in"
+      );
+      await setItem(STORAGE_KEYS.authToken, authPayload.token);
+      await removeItem(STORAGE_KEYS.authWallet);
+      setToken(authPayload.token);
+      setWallet(null);
+      setCredits(authPayload.credits || 0);
+      setAccountLabel("Google");
+      setAuthStatus({ loading: false, error: null });
+      const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
+      if (!storedCharacter) {
+        setActiveTab("story");
+        setCreationVisible(true);
+      }
+    } catch (error) {
+      setAuthStatus({
+        loading: false,
+        error: error?.message || "Google sign-in failed.",
+      });
+    }
+  }, [serverUrl]);
+
   const signInAsGuest = useCallback(async () => {
     setAuthStatus({ loading: true, error: null });
     try {
@@ -534,6 +601,13 @@ export default function App() {
 
   const disconnectWallet = useCallback(async () => {
     try {
+      if (isPlayBuild) {
+        try {
+          await GoogleSignin.signOut();
+        } catch (error) {
+          // Ignore Google sign-out failures.
+        }
+      }
       if (provider?.disconnect) {
         await provider.disconnect();
       }
@@ -615,6 +689,13 @@ export default function App() {
   const openCharacterCreator = useCallback(() => setCreationVisible(true), []);
   const closeCharacterCreator = useCallback(() => setCreationVisible(false), []);
   const openWallet = useCallback(() => {
+    if (isPlayBuild) {
+      setAuthStatus({
+        loading: false,
+        error: "WalletConnect is disabled on this build.",
+      });
+      return;
+    }
     if (!walletReady) {
       setAuthStatus({
         loading: false,
@@ -629,7 +710,8 @@ export default function App() {
   const [resetSessionToken, setResetSessionToken] = useState(0);
   const handleCharacterCreated = useCallback(
     (character) => {
-      const requestId = character?.requestId || null;
+      const requestId =
+        character?.requestId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       if (requestId && lastCharacterRequestRef.current === requestId) {
         return;
       }
@@ -641,7 +723,7 @@ export default function App() {
       }
       closeCharacterCreator();
       setActiveTab("story");
-      setPendingCharacterEntry({ ...character, timestamp: Date.now() });
+      setPendingCharacterEntry({ ...character, requestId, timestamp: Date.now() });
       setResetSessionToken(Date.now());
       setCurrentCharacter(character);
       setJson(STORAGE_KEYS.lastCharacter, character);
@@ -819,18 +901,23 @@ export default function App() {
           onOpenWallet={openWallet}
           authStatus={authStatus}
           onSignIn={signInWithWallet}
+          onGoogleSignIn={signInWithGoogle}
           onGuestSignIn={signInAsGuest}
           onDisconnect={disconnectWallet}
           onResetWallet={resetWallet}
           accountLabel={accountLabel}
+          showWalletConnect={!isPlayBuild}
+          showGoogleSignIn={isPlayBuild}
           updateStatus={updateStatus}
         />
-        <WalletConnectModal
-          projectId={WALLETCONNECT_PROJECT_ID}
-          providerMetadata={WALLETCONNECT_METADATA}
-          relayUrl={WALLETCONNECT_RELAY_URL}
-          sessionParams={WALLETCONNECT_SESSION_PARAMS}
-        />
+        {WalletConnectModal && !isPlayBuild ? (
+          <WalletConnectModal
+            projectId={WALLETCONNECT_PROJECT_ID}
+            providerMetadata={WALLETCONNECT_METADATA}
+            relayUrl={WALLETCONNECT_RELAY_URL}
+            sessionParams={WALLETCONNECT_SESSION_PARAMS}
+          />
+        ) : null}
       </>
     );
   }
@@ -966,12 +1053,6 @@ export default function App() {
           </View>
         </View>
       </Modal>
-      <WalletConnectModal
-        projectId={WALLETCONNECT_PROJECT_ID}
-        providerMetadata={WALLETCONNECT_METADATA}
-        relayUrl={WALLETCONNECT_RELAY_URL}
-        sessionParams={WALLETCONNECT_SESSION_PARAMS}
-      />
     </>
   );
 }

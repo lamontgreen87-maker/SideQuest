@@ -99,14 +99,26 @@ const INTRO_FALLBACKS = [
   "Stormlight flashes over a ridge of broken pillars as the earth rumbles beneath your boots. A hidden door has opened in the hillside, exhaling warm breath and the faint scent of spice and ash. Somewhere inside, a bell rings once, then stops. What do you do?",
   "A low chant rises from the valley, and the torches along the old road flare as you approach. The shrine ahead is half-collapsed, its altar split, yet fresh footprints circle the entrance. Your pack shifts as if something inside wants out. Will you enter, scout, or call out?",
 ];
+let lastIntroIndex = -1;
+let lastFallbackIndex = -1;
 
 function pickIntro() {
-  const index = Math.floor(Math.random() * INTRO_PROMPTS.length);
+  if (!INTRO_PROMPTS.length) return "";
+  let index = Math.floor(Math.random() * INTRO_PROMPTS.length);
+  if (INTRO_PROMPTS.length > 1 && index === lastIntroIndex) {
+    index = (index + 1) % INTRO_PROMPTS.length;
+  }
+  lastIntroIndex = index;
   return INTRO_PROMPTS[index] || INTRO_PROMPTS[0];
 }
 
 function pickFallbackIntro() {
-  const index = Math.floor(Math.random() * INTRO_FALLBACKS.length);
+  if (!INTRO_FALLBACKS.length) return "";
+  let index = Math.floor(Math.random() * INTRO_FALLBACKS.length);
+  if (INTRO_FALLBACKS.length > 1 && index === lastFallbackIndex) {
+    index = (index + 1) % INTRO_FALLBACKS.length;
+  }
+  lastFallbackIndex = index;
   return INTRO_FALLBACKS[index] || INTRO_FALLBACKS[0];
 }
 
@@ -207,6 +219,10 @@ export default function StoryScreen({
   const keyboardTranslate = useRef(new Animated.Value(0)).current;
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const shouldNarrate = useCallback(() => Math.random() < 0.5, []);
+  const ensureSessionRef = useRef(null);
+  const fetchSessionIntroRef = useRef(null);
+  const makeMessageRef = useRef(null);
+  const onCharacterEntryHandledRef = useRef(null);
   const normalizeSpellKey = useCallback(
     (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " "),
     []
@@ -952,6 +968,22 @@ export default function StoryScreen({
   }, [sessionEntry, onSessionEntryHandled]);
 
   useEffect(() => {
+    ensureSessionRef.current = ensureSession;
+  }, [ensureSession]);
+
+  useEffect(() => {
+    fetchSessionIntroRef.current = fetchSessionIntro;
+  }, [fetchSessionIntro]);
+
+  useEffect(() => {
+    makeMessageRef.current = makeMessage;
+  }, [makeMessage]);
+
+  useEffect(() => {
+    onCharacterEntryHandledRef.current = onCharacterEntryHandled;
+  }, [onCharacterEntryHandled]);
+
+  useEffect(() => {
     if (!characterEntry) return;
     if (introRequestRef.current.inFlight) {
       return;
@@ -969,46 +1001,60 @@ export default function StoryScreen({
     storyCache.introKey = introKey;
     setAdventureLoading(true);
     let isActive = true;
+    let fallbackTimer = null;
     const runIntro = async () => {
       const localIntro = pickFallbackIntro() || pickIntro();
-      if (!isActive) return;
-      setTimeout(() => {
-        if (!isActive) return;
-        setMessages((prev) => [...prev, makeMessage("assistant", localIntro)]);
+      let introApplied = false;
+      const applyIntro = (text) => {
+        if (introApplied || !isActive) return;
+        introApplied = true;
+        const buildMessage = makeMessageRef.current || makeMessage;
+        setMessages((prev) => [...prev, buildMessage("assistant", text)]);
         setAdventureLoading(false);
-        onCharacterEntryHandled?.();
-      }, 300);
+        onCharacterEntryHandledRef.current?.();
+      };
+      fallbackTimer = setTimeout(() => {
+        applyIntro(localIntro);
+        introRequestRef.current = { key: introKey, inFlight: false };
+      }, 5000);
+      if (!isActive) return;
+      setTimeout(() => applyIntro(localIntro), 300);
 
       let serverIntro = null;
       try {
-        const id = await ensureSession();
-        serverIntro = await fetchSessionIntro(id, characterEntry);
+        const ensureSessionFn = ensureSessionRef.current || ensureSession;
+        const fetchSessionIntroFn = fetchSessionIntroRef.current || fetchSessionIntro;
+        const id = await ensureSessionFn();
+        serverIntro = await fetchSessionIntroFn(id, characterEntry);
       } catch (error) {
         serverIntro = null;
       }
       if (!isActive) return;
       if (serverIntro && serverIntro !== localIntro) {
+        const buildMessage = makeMessageRef.current || makeMessage;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant" && last?.content === localIntro) {
-            return [...prev.slice(0, -1), makeMessage("assistant", serverIntro)];
+            return [...prev.slice(0, -1), buildMessage("assistant", serverIntro)];
           }
-          return [...prev, makeMessage("assistant", serverIntro)];
+          return [...prev, buildMessage("assistant", serverIntro)];
         });
       }
       introRequestRef.current = { key: introKey, inFlight: false };
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+      }
     };
     runIntro();
     return () => {
       isActive = false;
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+      }
+      setAdventureLoading(false);
+      introRequestRef.current = { key: introKey, inFlight: false };
     };
-  }, [
-    characterEntry,
-    onCharacterEntryHandled,
-    makeMessage,
-    ensureSession,
-    fetchSessionIntro,
-  ]);
+  }, [characterEntry]);
 
   const checkModeButtons = useMemo(
     () => [
@@ -1135,6 +1181,13 @@ export default function StoryScreen({
       let storyActionText = actionText;
       setMessages((prev) => [...prev, makeMessage("user", actionText)]);
       setShowSpellMenu(false);
+      if (!rulesSessionId) {
+        setMessages((prev) => [
+          ...prev,
+          makeMessage("assistant", "You can only cast spells in combat."),
+        ]);
+        return;
+      }
       setPlayerTurn(false);
       setCombatBusy(true);
       try {
@@ -1183,6 +1236,7 @@ export default function StoryScreen({
       shouldNarrate,
       spellCatalogMap,
       normalizeSpellKey,
+      rulesSessionId,
     ]
   );
 

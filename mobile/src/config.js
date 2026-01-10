@@ -1,4 +1,4 @@
-export const APP_VERSION = "0.1.5";
+export const APP_VERSION = "0.1.6";
 
 export const LOCAL_SERVER_URL = "http://192.168.1.208:8000";
 export const PROD_SERVER_URL = "https://sidequestai.org";
@@ -45,6 +45,9 @@ export const WALLETCONNECT_SESSION_PARAMS = {
     },
   },
 };
+
+export const GOOGLE_WEB_CLIENT_ID =
+  "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com";
 
 export const STORAGE_KEYS = {
   serverUrl: "dc_server_url",

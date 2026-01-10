@@ -1,6 +1,10 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+def isPlayTask = gradle.startParameter.taskNames.any { it.toLowerCase().contains("play") }
+if (isPlayTask) {
+    apply plugin: "com.google.gms.google-services"
+}
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
@@ -96,6 +100,16 @@ android {
         versionName "0.1.5"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
+    }
+    flavorDimensions "distribution"
+    productFlavors {
+        standard {
+            dimension "distribution"
+        }
+        play {
+            dimension "distribution"
+            applicationId "com.lamontgreen.sidequest"
+        }
     }
     signingConfigs {
         debug {

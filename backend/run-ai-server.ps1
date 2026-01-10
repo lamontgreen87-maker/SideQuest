@@ -21,12 +21,13 @@ if (-not $env:MODEL_CLERK) { $env:MODEL_CLERK = "qwen2.5:1.5b" }
 if (-not $env:MODEL_CLERK_FALLBACK) { $env:MODEL_CLERK_FALLBACK = $env:MODEL_NAME }
 if (-not $env:CLERK_LOG_PATH) { $env:CLERK_LOG_PATH = (Join-Path $env:LOCALAPPDATA "SideQuest\clerk.log") }
 if (-not $env:CORS_ORIGINS) { $env:CORS_ORIGINS = "*" }
+if (-not $env:GOOGLE_CLIENT_ID) { $env:GOOGLE_CLIENT_ID = "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com" }
 if (-not $env:POLYGON_RPC_URL) { $env:POLYGON_RPC_URL = "https://eth.llamarpc.com" }
 if (-not $env:USDT_CONTRACT_ADDRESS) { $env:USDT_CONTRACT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7" }
 if (-not $env:PAYMENT_WALLET_ADDRESS) { $env:PAYMENT_WALLET_ADDRESS = "0x062F50dD65caEC59AF85605a66f8287b22565F06" }
 if (-not $env:PAYMENT_CONFIRMATIONS) { $env:PAYMENT_CONFIRMATIONS = "1" }
 if (-not $env:PAYMENT_MAX_BLOCK_RANGE) { $env:PAYMENT_MAX_BLOCK_RANGE = "100" }
-if (-not $env:STARTING_CREDITS) { $env:STARTING_CREDITS = "25" }
+if (-not $env:STARTING_CREDITS) { $env:STARTING_CREDITS = "50" }
 
 $logDir = Split-Path -Path $LogPath -Parent
 if ($logDir -and -not (Test-Path $logDir)) {

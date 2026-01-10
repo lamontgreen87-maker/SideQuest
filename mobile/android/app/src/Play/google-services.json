@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "816546538702",
+    "project_id": "side-quest-e23e5",
+    "storage_bucket": "side-quest-e23e5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:816546538702:android:1f0eb0d560253b2b055c9f",
+        "android_client_info": {
+          "package_name": "com.lamontgreen.sidequest"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "816546538702-dfpf0vt5b8v09osonlc93kpoh55p6dg3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lamontgreen.sidequest",
+            "certificate_hash": "e04db0e2e40cb64c421c8109664e287e7b920189"
+          }
+        },
+        {
+          "client_id": "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDf9ZY6xgt9jVzXJrIgmuHPt3PV9di4Pds"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
