@@ -162,6 +162,14 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
     campaign = world_state.get("campaign")
     if isinstance(campaign, dict):
         campaign_summary = str(campaign.get("summary") or "").strip()
+    
+    # Intro Context Logic
+    intro_mode = False
+    # If summary is empty and turn count is low, we assume intro mode.
+    # We can infer turn count roughly by world updates size or just passed state flags if we had them.
+    # For now, if world_summary is very short or empty, we suppress the heavy campaign brief usage in text generation prompt
+    # to avoid "Huge Intro Dump".
+    
     combat_mode = bool(state.get("in_combat"))
     combat_line = ""
     if combat_mode:
@@ -190,6 +198,12 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         if "locations" in world_state["staged_lore"]:
             for loc in world_state["staged_lore"]["locations"]:
                 staged_lore_line += f"- Location: {loc['name']}, {loc['description']}\n"
+                
+    # If it's the very start (no summary yet), suppress campaign brief from the prompt so we don't dump it.
+    final_campaign_summary = campaign_summary
+    if not world_summary:
+         final_campaign_summary = "" # Hide it for the first turn to ensure stickiness to intro.
+
     return (
         DEFAULT_SYSTEM_PROMPT
         + " Use the game state JSON below. If the state changes, reflect it. "
@@ -203,7 +217,7 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         + loot_line
         + locations_line
         + staged_lore_line
-        + ("Campaign brief:\n" + campaign_summary + "\n" if campaign_summary else "")
+        + ("Campaign brief:\n" + final_campaign_summary + "\n" if final_campaign_summary else "")
         + ("World summary:\n" + world_summary + "\n" if world_summary else "")
         + "Game state JSON:\n"
         + safe_state
@@ -214,12 +228,37 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
 def split_narration_hint(text: str) -> Tuple[str, Optional[str]]:
     hint = None
     kept = []
+    # Regex for "narration_hint:" or "narration hint:" or "[narration hint]" case insensitive
+    hint_pattern = re.compile(r"^(?:\[?\s*narration[_\s]+hint\s*\]?\s*:?)(.*)$", re.IGNORECASE)
+    
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.lower().startswith("narration_hint:"):
-            hint = stripped.split(":", 1)[1].strip().lower()
-            continue
-        kept.append(line)
+        match = hint_pattern.match(stripped)
+        if match:
+            # We found a hint line
+            content_after = match.group(1).strip()
+            # If there is content after, it might be the hint value OR mixed content
+            # The prompt asks for "NARRATION_HINT: narrate", so content_after should be 'narrate' or 'skip'
+            # If it's long, it might be leaked story text on the same line: "NARRATION_HINT: The door opens..."
+            # We'll try to save the story part if it looks like story.
+            
+            # Simple heuristic: if the content is just 'narrate' or 'skip' (or similar short token), treat as hint.
+            # If it's longer, assume it's story text leaked on the same line.
+            
+            if len(content_after) < 20: 
+                # Likely just the hint value
+                if content_after:
+                   hint = content_after.lower()
+                continue # Skip this line purely
+            else:
+                # Likely "NARRATION_HINT: The door opens..."
+                # We want to keep "The door opens..."
+                kept.append(content_after)
+                # We can't validly extract the hint value easily here without potentially eating first words of story.
+                # safely assume narrate if we have text.
+                hint = "narrate" 
+        else:
+            kept.append(line)
     return ("\n".join(kept).strip(), hint)
 
 if CORS_ORIGINS == "*":
@@ -1848,6 +1887,7 @@ def build_clerk_messages(
                 "inventory_remove should list items that are consumed or removed. "
                 "new_locations should list any new and significant locations mentioned in the story. "
                 "used_staged_lore should list the names of any NPCs or locations from the 'staged_lore' that were used in the story. "
+                "If a physical combat encounter begins, include 'encounter': {'name': 'Name of Enemy', 'cr': 'optional CR'} in the JSON. "
                 "Make leveling part of your GM goals: aim for progression from level 1 to level 5 "
                 "in about 2 hours of play (roughly ~5 encounters). When a milestone is reached, "
                 "update state.character.level and add a world_update like 'Level up: <name> is now level X.'"
@@ -1969,6 +2009,12 @@ async def clerk_update_state(
                 asyncio.create_task(_background_task(location_name))
 
     updated_world, encounter = maybe_trigger_encounter(next_state, world_state)
+    
+    # Allow Clerk to force an encounter
+    clerk_encounter = payload.get("encounter")
+    if isinstance(clerk_encounter, dict) and clerk_encounter.get("name"):
+         encounter = clerk_encounter
+
     result = {
         "should_narrate": bool(payload.get("should_narrate", True)),
         "state": next_state,
@@ -1978,9 +2024,24 @@ async def clerk_update_state(
         "world_summary": world_summary,
         "action_type": action_type,
         "world_state": updated_world,
+        "encounter": encounter, 
     }
     if result["action_type"] != "equip":
         result["should_narrate"] = True
+    if encounter:
+        encounter_name = encounter.get("name") or "a threat"
+        cr_value = encounter.get("cr")
+        encounter_line = f"An encounter begins: {encounter_name} appears."
+        if cr_value is not None:
+             encounter_line = f"An encounter begins: {encounter_name} (CR {cr_value}) appears."
+        # Append encounter to story input so Narrator sees it
+        story_input = result["story_input"]
+        if encounter_line not in story_input:
+             result["story_input"] = f"{story_input} {encounter_line}".strip()
+        result["should_narrate"] = True
+        result["action_type"] = "narrate"
+        next_state["pending_encounter"] = encounter
+        
     if not encounter:
         setup = str(updated_world.get("next_encounter_setup") or "").strip()
         if setup and not updated_world.get("next_encounter_setup_used"):

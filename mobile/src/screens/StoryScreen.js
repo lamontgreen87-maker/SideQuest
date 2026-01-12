@@ -176,9 +176,9 @@ export default function StoryScreen({
         msg?.id
           ? msg
           : {
-              ...msg,
-              id: makeId(),
-            }
+            ...msg,
+            id: makeId(),
+          }
       ),
     [makeId]
   );
@@ -351,6 +351,10 @@ export default function StoryScreen({
       const encounter = response?.encounter;
       const triggerEncounter = () => {
         if (encounter) {
+          setMessages((prev) => [
+            ...prev,
+            makeMessage("system", "AN ENEMY APPEARS: FIGHT!")
+          ]);
           handleEncounterStart(encounter);
         }
       };
@@ -373,10 +377,10 @@ export default function StoryScreen({
       }
       const aiContent = stripThinking(
         response?.response ??
-          response?.assistant ??
-          response?.content ??
-          response?.narration ??
-          response?.message
+        response?.assistant ??
+        response?.content ??
+        response?.narration ??
+        response?.message
       );
       if (aiContent) {
         setMessages((prev) => {
@@ -842,20 +846,20 @@ export default function StoryScreen({
     } finally {
       setLoading(false);
     }
-    }, [
-      input,
-      loading,
-      resendMessage,
-      isRemoteServer,
-      appendAssistantResponse,
-      ensureSession,
-      serverUrl,
-      onCreditsUpdate,
-      withHealthGuard,
-      makeMessage,
-      shouldCheckStatus,
-      pollSessionReply,
-    ]);
+  }, [
+    input,
+    loading,
+    resendMessage,
+    isRemoteServer,
+    appendAssistantResponse,
+    ensureSession,
+    serverUrl,
+    onCreditsUpdate,
+    withHealthGuard,
+    makeMessage,
+    shouldCheckStatus,
+    pollSessionReply,
+  ]);
 
   const sendActionMessage = useCallback(
     async (actionText) => {
@@ -930,37 +934,37 @@ export default function StoryScreen({
 
   useEffect(() => {
     if (!sessionId || !messages.length) return;
-      const persist = async () => {
-        const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
-        const character = internalCharacter
-          ? {
-              name: internalCharacter.name || "Adventurer",
-              klass: internalCharacter.klass || "Hero",
-              level: Number(internalCharacter.level) || 1,
-            }
-          : null;
-        const entry = {
-          id: sessionId,
-          title: buildSessionTitle(messages),
-          preview: buildSessionPreview(messages),
-          updatedAt: Date.now(),
-          character,
-          messages,
-        };
-        
-        const existingIndex = storedSessions.findIndex((session) => session.id === sessionId);
-        let next;
-        if (existingIndex !== -1) {
-          next = [...storedSessions];
-          next[existingIndex] = entry;
-        } else {
-          next = [entry, ...storedSessions];
+    const persist = async () => {
+      const storedSessions = await getJson(STORAGE_KEYS.sessions, []);
+      const character = internalCharacter
+        ? {
+          name: internalCharacter.name || "Adventurer",
+          klass: internalCharacter.klass || "Hero",
+          level: Number(internalCharacter.level) || 1,
         }
-
-        await setJson(STORAGE_KEYS.sessions, next.slice(0, 20));
+        : null;
+      const entry = {
+        id: sessionId,
+        title: buildSessionTitle(messages),
+        preview: buildSessionPreview(messages),
+        updatedAt: Date.now(),
+        character,
+        messages,
       };
+
+      const existingIndex = storedSessions.findIndex((session) => session.id === sessionId);
+      let next;
+      if (existingIndex !== -1) {
+        next = [...storedSessions];
+        next[existingIndex] = entry;
+      } else {
+        next = [entry, ...storedSessions];
+      }
+
+      await setJson(STORAGE_KEYS.sessions, next.slice(0, 20));
+    };
     persist();
-    }, [sessionId, messages, buildSessionTitle, buildSessionPreview, internalCharacter]);
+  }, [sessionId, messages, buildSessionTitle, buildSessionPreview, internalCharacter]);
 
   useEffect(() => {
     if (!sessionEntry) return;
@@ -1219,7 +1223,7 @@ export default function StoryScreen({
             summary = `${spellLabel} ${response.hit ? "hits" : "misses"}: ${response.attack_total} to hit for ${response.damage_total} ${response.damage_type || "magic"}.`;
           }
         } else if (response?.save) {
-          summary = `${spellLabel} forces a ${response.save.toUpperCase()} save (${response.attack_total ?? "-" } vs DC ${response.dc ?? "-" }).`;
+          summary = `${spellLabel} forces a ${response.save.toUpperCase()} save (${response.attack_total ?? "-"} vs DC ${response.dc ?? "-"}).`;
           if (response.damage_total) {
             summary += ` Deals ${response.damage_total} ${response.damage_type || "magic"} damage.`;
           }
@@ -1263,9 +1267,9 @@ export default function StoryScreen({
         data && Object.keys(data).length
           ? data
           : DEFAULT_SPELLS.reduce((acc, entry) => {
-              acc[entry.id] = entry;
-              return acc;
-            }, {});
+            acc[entry.id] = entry;
+            return acc;
+          }, {});
       const nameMap = {};
       Object.entries(fallback).forEach(([id, payload]) => {
         const name = payload.name;
@@ -1379,13 +1383,21 @@ export default function StoryScreen({
             <View
               style={[
                 styles.bubble,
-                item.role === "user" ? styles.userBubble : styles.aiBubble,
+                item.role === "user"
+                  ? styles.userBubble
+                  : item.role === "system"
+                    ? styles.systemBubble
+                    : styles.aiBubble,
               ]}
             >
               <Text
                 style={[
                   styles.bubbleText,
-                  item.role === "user" ? styles.userText : styles.aiText,
+                  item.role === "user"
+                    ? styles.userText
+                    : item.role === "system"
+                      ? styles.systemText
+                      : styles.aiText,
                 ]}
               >
                 {item.content}
@@ -1397,13 +1409,13 @@ export default function StoryScreen({
           keyboardShouldPersistTaps="handled"
         />
         {(loading || combatBusy || checkBusy) && !adventureLoading && (
-            <View style={styles.loadingOverlay} pointerEvents="none">
-              <ActivityIndicator size="large" color={colors.gold} />
-              <Text style={styles.loadingLabel}>
-                The GM is {LOADING_FLAVOR[loadingFlavorIndex]}...
-              </Text>
-            </View>
-          )}
+          <View style={styles.loadingOverlay} pointerEvents="none">
+            <ActivityIndicator size="large" color={colors.gold} />
+            <Text style={styles.loadingLabel}>
+              The GM is {LOADING_FLAVOR[loadingFlavorIndex]}...
+            </Text>
+          </View>
+        )}
         {adventureLoading && !loading && (
           <View style={styles.loadingOverlay} pointerEvents="none">
             <ActivityIndicator size="large" color={colors.gold} />
@@ -1421,8 +1433,8 @@ export default function StoryScreen({
             bottom: keyboardOpen
               ? spacing.xs
               : DRAWER_COLLAPSED_HEIGHT +
-                (drawerExpanded ? DRAWER_CONTENT_HEIGHT : 0) +
-                spacing.xs,
+              (drawerExpanded ? DRAWER_CONTENT_HEIGHT : 0) +
+              spacing.xs,
           },
         ]}
       >
@@ -1733,6 +1745,18 @@ const styles = StyleSheet.create({
   },
   aiText: {
     color: colors.parchment,
+  },
+  systemBubble: {
+    alignSelf: "center",
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+    marginVertical: spacing.sm,
+  },
+  systemText: {
+    color: colors.ink,
+    fontWeight: "bold",
+    textAlign: "center",
+    letterSpacing: 1,
   },
   input: {
     flex: 1,
