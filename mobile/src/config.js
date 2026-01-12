@@ -1,10 +1,9 @@
 export const APP_VERSION = "0.1.6";
 
 export const LOCAL_SERVER_URL = "http://192.168.1.208:8000";
-export const PROD_SERVER_URL = "https://shk0z930he28ys-8000.proxy.runpod.net";
+export const PROD_SERVER_URL = "https://d54aa6e74f0c-8000.proxy.runpod.net";
 export const DEFAULT_SERVER_URL = PROD_SERVER_URL;
-export const GIST_CONFIG_URL =
-  "https://gist.githubusercontent.com/lamontgreen87-maker/ad3e3e7abcf09f755a5087aaa15a5bd1/raw/config.json";
+export const GIST_CONFIG_URL = null; // Disabled to make Pod the "only" server
 
 export const GITHUB_RELEASES_URL =
   "https://api.github.com/repos/lamontgreen87-maker/SideQuest/releases/latest";

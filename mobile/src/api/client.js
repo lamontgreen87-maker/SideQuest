@@ -26,7 +26,9 @@ export async function apiGet(baseUrl, path, timeoutMs = 600000) { // Default to 
     clearTimeout(id);
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `GET ${path} failed`);
+      const error = new Error(text || `GET ${path} failed`);
+      error.status = response.status;
+      throw error;
     }
     return response.json();
   } catch (error) {
@@ -52,7 +54,9 @@ export async function apiPost(baseUrl, path, body, timeoutMs = 600000) { // Defa
     clearTimeout(id);
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `POST ${path} failed`);
+      const error = new Error(text || `POST ${path} failed`);
+      error.status = response.status;
+      throw error;
     }
     return response.json();
   } catch (error) {
@@ -78,7 +82,9 @@ export async function apiPostText(baseUrl, path, body, timeoutMs = 600000) { // 
     clearTimeout(id);
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `POST ${path} failed`);
+      const error = new Error(text || `POST ${path} failed`);
+      error.status = response.status;
+      throw error;
     }
     return response.text();
   } catch (error) {

@@ -35,32 +35,6 @@ export default function AuthScreen({
         <Text style={styles.title}>Side Quest</Text>
         <Text style={styles.subtitle}>Connect your wallet to continue.</Text>
 
-        <Section title="Server">
-          <Field
-            label="Server URL"
-            value={serverUrl}
-            onChangeText={setServerUrl}
-            placeholder="https://your-server.com"
-          />
-          <View style={styles.row}>
-            <Button
-              label="Save"
-              onPress={onSaveServerUrl}
-              disabled={!serverUrl}
-            />
-            <Button
-              label="Check Gist"
-              onPress={onRefreshServerUrl}
-              variant="ghost"
-            />
-          </View>
-          {walletStatus?.health ? (
-            <Text style={styles.statusOk}>Server: {walletStatus.health}</Text>
-          ) : null}
-          {walletStatus?.healthError ? (
-            <Text style={styles.statusError}>{walletStatus.healthError}</Text>
-          ) : null}
-        </Section>
 
         {showWalletConnect ? (
           <Section title="Wallet">

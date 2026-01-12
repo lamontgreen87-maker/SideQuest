@@ -160,6 +160,7 @@ export default function StoryScreen({
   onSessionEntryHandled,
   resetSessionToken,
   currentCharacter,
+  onUnauthorized,
 }) {
   const messageSeq = useRef(0);
   const introRequestRef = useRef({ key: null, inFlight: false });
@@ -843,6 +844,11 @@ export default function StoryScreen({
       setMessages((prev) => [...prev, makeMessage("assistant", briefError)]);
       setResendReady(true);
       setResendMessage(payloadMessage);
+
+      // Handle Unauthorized (401/403)
+      if (error?.status === 401 || error?.status === 403) {
+        if (onUnauthorized) onUnauthorized();
+      }
     } finally {
       setLoading(false);
     }

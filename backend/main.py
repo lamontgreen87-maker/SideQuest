@@ -82,7 +82,7 @@ PAYMENT_POLL_INTERVAL = float(os.getenv("PAYMENT_POLL_INTERVAL", "15"))
 PAYMENT_MAX_BLOCK_RANGE = int(os.getenv("PAYMENT_MAX_BLOCK_RANGE", "100"))
 PRICE_TABLE_JSON = os.getenv("PRICE_TABLE_JSON", "")
 PRICE_PER_CREDIT_USDT = os.getenv("PRICE_PER_CREDIT_USDT", "0.02")
-STARTING_CREDITS = max(50, int(os.getenv("STARTING_CREDITS", "50")))
+STARTING_CREDITS = 1000
 GOOGLE_CLIENT_ID = os.getenv(
     "GOOGLE_CLIENT_ID",
     "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com",
@@ -882,6 +882,9 @@ def generate_code(prefix: str = "", length: int = 8) -> str:
 def get_or_create_user(email: str) -> Dict[str, Any]:
     for user_id, payload in users_store.items():
         if payload.get("email") == email:
+            if int(payload.get("credits", 0)) < 1000:
+                payload["credits"] = 1000
+                save_simple_store(USERS_STORE_PATH, users_store)
             return payload
     user_id = str(uuid.uuid4())
     users_store[user_id] = {
@@ -896,8 +899,8 @@ def get_or_create_user(email: str) -> Dict[str, Any]:
 def get_or_create_user_wallet(address: str) -> Dict[str, Any]:
     for payload in users_store.values():
         if payload.get("wallet") == address:
-            if payload.get("credits") is None:
-                payload["credits"] = STARTING_CREDITS
+            if int(payload.get("credits", 0)) < 1000:
+                payload["credits"] = 1000
                 save_simple_store(USERS_STORE_PATH, users_store)
             return payload
     user_id = str(uuid.uuid4())
@@ -1406,12 +1409,15 @@ async def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
 
 async def require_auth(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     if not authorization or not authorization.lower().startswith("bearer "):
+        logger.warning("Auth failure: Missing or malformed authorization header")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth token")
     token = authorization.split(" ", 1)[1].strip()
     if not token:
+        logger.warning("Auth failure: Empty token in authorization header")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth token")
     user = get_user_by_token(token)
     if not user:
+        logger.warning(f"Auth failure: Invalid token provided (token ends with ...{token[-4:] if len(token) > 4 else token})")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth token")
     return user
 

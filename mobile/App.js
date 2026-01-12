@@ -49,7 +49,7 @@ const useWalletConnectModal = walletConnectModule?.useWalletConnectModal;
 const WalletConnectModal = walletConnectModule?.WalletConnectModal;
 
 if (typeof BackHandler.removeEventListener !== "function") {
-  BackHandler.removeEventListener = () => {};
+  BackHandler.removeEventListener = () => { };
 }
 
 function normalizeVersion(value) {
@@ -118,7 +118,7 @@ export default function App() {
   });
   const walletConnectState = useWalletConnectModal
     ? useWalletConnectModal()
-    : { open: () => {}, provider: null, isConnected: false, address: null };
+    : { open: () => { }, provider: null, isConnected: false, address: null };
   const { open, provider, isConnected, address } = walletConnectState;
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [token, setToken] = useState(null);
@@ -174,52 +174,17 @@ export default function App() {
   );
 
   const loadStoredState = useCallback(async () => {
-    let initialServerUrl = await getItem(STORAGE_KEYS.serverUrl, DEFAULT_SERVER_URL);
-    if (isLocalUrl(initialServerUrl)) {
-      initialServerUrl = PROD_SERVER_URL;
-      await setItem(STORAGE_KEYS.serverUrl, initialServerUrl);
-    }
+    // Only use the hardcoded default server
+    const initialServerUrl = DEFAULT_SERVER_URL;
     setServerUrl(initialServerUrl);
+
+    // Check health once
+    checkHealth(initialServerUrl);
+
     const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
     if (storedCharacter) {
       setCurrentCharacter(storedCharacter);
     }
-
-    let serverIsHealthy = true;
-    try {
-      await apiGet(initialServerUrl, "/health");
-    } catch (error) {
-      serverIsHealthy = false;
-    }
-
-    if (!serverIsHealthy) {
-      // If server is not healthy, try refreshing from Gist
-      try {
-        const response = await fetch(GIST_CONFIG_URL);
-        if (response.ok) {
-          const data = await response.json();
-          const candidate =
-            data.serverUrl || data.server_url || data.server || data.url || null;
-          if (candidate) {
-            initialServerUrl = candidate; // Update to new URL from Gist
-            setServerUrl(candidate); // Update state
-            await setItem(STORAGE_KEYS.serverUrl, candidate); // Save to storage
-          }
-        }
-      } catch (error) {
-        // Ignore gist errors and fall back below.
-      }
-    }
-
-    if (!serverIsHealthy && initialServerUrl !== PROD_SERVER_URL) {
-      const fallbackUrl = PROD_SERVER_URL;
-      initialServerUrl = fallbackUrl;
-      setServerUrl(fallbackUrl);
-      await setItem(STORAGE_KEYS.serverUrl, fallbackUrl);
-    }
-
-    // Now, run the health check for the *final* determined serverUrl
-    checkHealth(initialServerUrl);
 
     const storedToken = await getItem(STORAGE_KEYS.authToken, null);
     const storedWallet = await getItem(STORAGE_KEYS.authWallet, null);
@@ -240,11 +205,13 @@ export default function App() {
         }
         setAccountLabel(label);
       } catch (error) {
-        await removeItem(STORAGE_KEYS.authToken);
-        await removeItem(STORAGE_KEYS.authWallet);
-        setToken(null);
-        setWallet(null);
-        setAccountLabel(null);
+        if (error?.status === 401 || error?.status === 403) {
+          await removeItem(STORAGE_KEYS.authToken);
+          await removeItem(STORAGE_KEYS.authWallet);
+          setToken(null);
+          setWallet(null);
+          setAccountLabel(null);
+        }
       }
     } else {
       setAccountLabel(null);
@@ -353,56 +320,13 @@ export default function App() {
     checkHealth(serverUrl);
   }, [serverUrl, checkHealth]);
 
-  const applyServerUrl = useCallback(
-    async (nextUrl) => {
-      if (isLocalUrl(nextUrl)) {
-        setWalletStatus((prev) => ({
-          ...prev,
-          healthError: "Local servers are disabled. Use the online server.",
-        }));
-        setServerUrl(PROD_SERVER_URL);
-        await setItem(STORAGE_KEYS.serverUrl, PROD_SERVER_URL);
-        checkHealth(PROD_SERVER_URL);
-        return;
-      }
-      setServerUrl(nextUrl);
-      await setItem(STORAGE_KEYS.serverUrl, nextUrl);
-      checkHealth(nextUrl);
-    },
-    [checkHealth]
-  );
+  const applyServerUrl = useCallback(() => {
+    // No-op to prevent manual overrides
+  }, []);
 
-  const refreshServerUrl = useCallback(async () => {
-    try {
-      const response = await fetch(GIST_CONFIG_URL);
-      if (!response.ok) {
-        throw new Error("Failed to fetch gist.");
-      }
-      const data = await response.json();
-      const candidate =
-        data.serverUrl || data.server_url || data.server || data.url || null;
-      if (candidate) {
-        if (isLocalUrl(candidate)) {
-          setWalletStatus((prev) => ({
-            ...prev,
-            healthError: "Local servers are disabled. Using online server.",
-          }));
-          setServerUrl(PROD_SERVER_URL);
-          await setItem(STORAGE_KEYS.serverUrl, PROD_SERVER_URL);
-          checkHealth(PROD_SERVER_URL);
-          return;
-        }
-        setServerUrl(candidate);
-        await setItem(STORAGE_KEYS.serverUrl, candidate);
-        checkHealth(candidate);
-      }
-    } catch (error) {
-      setWalletStatus((prev) => ({
-        ...prev,
-        healthError: "Gist lookup failed.",
-      }));
-    }
-  }, [checkHealth]);
+  const refreshServerUrl = useCallback(() => {
+    // No-op to prevent dynamic refreshes
+  }, []);
 
   const signInWithWallet = useCallback(async () => {
     if (!address || !provider) {
@@ -622,6 +546,16 @@ export default function App() {
     setAccountLabel(null);
   }, [provider]);
 
+  const handleUnauthorized = useCallback(async () => {
+    await removeItem(STORAGE_KEYS.authToken);
+    await removeItem(STORAGE_KEYS.authWallet);
+    setToken(null);
+    setWallet(null);
+    setAccountLabel(null);
+    setCredits(0);
+    Alert.alert("Session Expired", "Your session has expired or is invalid. Please sign in again.");
+  }, []);
+
   const resetWallet = useCallback(async () => {
     try {
       if (provider?.signer?.client?.pairing?.getPairings) {
@@ -679,8 +613,8 @@ export default function App() {
   const serverStatusLabel = walletStatus.healthError
     ? walletStatus.healthError
     : walletStatus.health
-    ? `Server ${walletStatus.health}`
-    : "Server ready";
+      ? `Server ${walletStatus.health}`
+      : "Server ready";
   const serverOnline = !walletStatus.healthError;
   const goToSettings = useCallback(() => setActiveTab("settings"), [setActiveTab]);
   const goToBestiary = useCallback(() => setActiveTab("bestiary"), [setActiveTab]);
@@ -816,6 +750,7 @@ export default function App() {
             onSessionEntryHandled={handleSessionEntryConsumed}
             resetSessionToken={resetSessionToken}
             currentCharacter={currentCharacter}
+            onUnauthorized={handleUnauthorized}
           />
         </View>
         <View
@@ -1005,43 +940,43 @@ export default function App() {
             {sessionsLoading ? (
               <Text style={modalStyles.emptyLabel}>Loading sessions...</Text>
             ) : sessionList.length ? (
-                <ScrollView contentContainerStyle={modalStyles.sessionList}>
-                  {sessionList.map((session) => (
-                    <Pressable
-                      key={session.id}
-                      style={modalStyles.sessionCard}
-                      onPress={() => handleSessionSelect(session)}
-                    >
-                      {(() => {
-                        const character = session.character || null;
-                        const name = character?.name;
-                        const klass = character?.klass;
-                        const level = Number(character?.level) || 1;
-                        const headerLabel = name
-                          ? `${name} | ${klass || "Hero"} | Lvl ${level}`
-                          : session.title || "Adventure";
-                        const preview = session.preview || "No recent events yet.";
-                        return (
-                          <>
-                            <View style={modalStyles.sessionHeaderRow}>
-                              <Text style={modalStyles.sessionTitle}>{headerLabel}</Text>
-                              <Pressable
-                                onPress={(event) => {
-                                  event?.stopPropagation?.();
-                                  deleteSession(session);
-                                }}
-                                style={modalStyles.sessionDelete}
-                              >
-                                <Text style={modalStyles.sessionDeleteLabel}>Delete</Text>
-                              </Pressable>
-                            </View>
-                            <Text style={modalStyles.sessionPreview}>{preview}</Text>
-                          </>
-                        );
-                      })()}
-                      <Text style={modalStyles.sessionMeta}>
-                        {session.updatedAt
-                          ? new Date(session.updatedAt).toLocaleString()
+              <ScrollView contentContainerStyle={modalStyles.sessionList}>
+                {sessionList.map((session) => (
+                  <Pressable
+                    key={session.id}
+                    style={modalStyles.sessionCard}
+                    onPress={() => handleSessionSelect(session)}
+                  >
+                    {(() => {
+                      const character = session.character || null;
+                      const name = character?.name;
+                      const klass = character?.klass;
+                      const level = Number(character?.level) || 1;
+                      const headerLabel = name
+                        ? `${name} | ${klass || "Hero"} | Lvl ${level}`
+                        : session.title || "Adventure";
+                      const preview = session.preview || "No recent events yet.";
+                      return (
+                        <>
+                          <View style={modalStyles.sessionHeaderRow}>
+                            <Text style={modalStyles.sessionTitle}>{headerLabel}</Text>
+                            <Pressable
+                              onPress={(event) => {
+                                event?.stopPropagation?.();
+                                deleteSession(session);
+                              }}
+                              style={modalStyles.sessionDelete}
+                            >
+                              <Text style={modalStyles.sessionDeleteLabel}>Delete</Text>
+                            </Pressable>
+                          </View>
+                          <Text style={modalStyles.sessionPreview}>{preview}</Text>
+                        </>
+                      );
+                    })()}
+                    <Text style={modalStyles.sessionMeta}>
+                      {session.updatedAt
+                        ? new Date(session.updatedAt).toLocaleString()
                         : "Saved"}
                     </Text>
                   </Pressable>
