@@ -4063,6 +4063,94 @@
       "skill_proficiencies": [],
       "conditions": [],
       "items": []
+    },
+    "fe239d46-8bb9-4029-9eda-9bfc461ba2b3": {
+      "name": "Blithe",
+      "class": "Monk",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Quarterstaff",
+          "attack_ability": "str",
+          "damage": "1d6+3",
+          "damage_type": "bludgeoning",
+          "finesse": false
+        }
+      ],
+      "race": "Half-Orc",
+      "background": "Acolyte",
+      "alignment": "Lawful Neutral",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "str",
+        "dex"
+      ],
+      "skill_proficiencies": [
+        "intimidation"
+      ],
+      "conditions": [],
+      "items": []
+    },
+    "fac71dd0-58f4-4563-ac54-90c2c606b153": {
+      "name": "Adventurer 165",
+      "class": "Paladin",
+      "level": 1,
+      "stats": {
+        "str": 16,
+        "dex": 14,
+        "con": 14,
+        "int": 12,
+        "wis": 10,
+        "cha": 8
+      },
+      "prof_bonus": 2,
+      "armor_class": 10,
+      "max_hp": 10,
+      "hp": 10,
+      "weapons": [
+        {
+          "name": "Greatsword",
+          "attack_ability": "str",
+          "damage": "2d6+3",
+          "damage_type": "slashing",
+          "finesse": false
+        }
+      ],
+      "race": "Dwarf",
+      "background": "Acolyte",
+      "alignment": "True Neutral",
+      "traits": [],
+      "languages": [],
+      "spellcasting_ability": "wis",
+      "cantrips_known": [],
+      "spellbook": [],
+      "prepared_spells": [],
+      "known_spells": [],
+      "save_proficiencies": [
+        "wis",
+        "cha"
+      ],
+      "skill_proficiencies": [],
+      "conditions": [],
+      "items": []
     }
   }
 }

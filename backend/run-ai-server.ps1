@@ -16,6 +16,7 @@ if (Test-Path $modelPath) {
 }
 if (-not $env:OLLAMA_URL) { $env:OLLAMA_URL = "http://127.0.0.1:11434" }
 if (-not $env:MODEL_NAME) { $env:MODEL_NAME = "qwen3:4b" }
+if (-not $env:OLLAMA_TIMEOUT_SECONDS) { $env:OLLAMA_TIMEOUT_SECONDS = "900" }
 if (-not $env:MODEL_FALLBACK) { $env:MODEL_FALLBACK = "qwen3:8b" }
 if (-not $env:MODEL_CLERK) { $env:MODEL_CLERK = "qwen2.5:1.5b" }
 if (-not $env:MODEL_CLERK_FALLBACK) { $env:MODEL_CLERK_FALLBACK = $env:MODEL_NAME }

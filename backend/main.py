@@ -49,6 +49,11 @@ from rules import (
     serialize_rules_session,
 )
 app = FastAPI()
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 PRIVACY_POLICY_PATH = Path(__file__).resolve().parent / "static" / "privacy.html"
 logger = logging.getLogger("uvicorn.error")
 

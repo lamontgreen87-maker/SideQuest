@@ -96,8 +96,9 @@ android {
         applicationId 'com.anonymous.dungeoncrawler'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
+        versionCode 1
         versionName "0.1.5"
+        missingDimensionStrategy 'distribution', 'standard'
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -108,7 +109,7 @@ android {
         }
         play {
             dimension "distribution"
-            applicationId "com.lamontgreen.sidequest"
+            applicationId 'com.anonymous.dungeoncrawler'
         }
     }
     signingConfigs {
