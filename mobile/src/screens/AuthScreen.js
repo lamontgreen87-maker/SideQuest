@@ -35,6 +35,33 @@ export default function AuthScreen({
         <Text style={styles.title}>Side Quest</Text>
         <Text style={styles.subtitle}>Connect your wallet to continue.</Text>
 
+        <Section title="Server Configuration">
+          <Field
+            label="Server URL"
+            value={serverUrl}
+            onChangeText={setServerUrl}
+            placeholder="https://your-runpod-url.com"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <View style={styles.row}>
+            <Button
+              label="Save Server URL"
+              onPress={onSaveServerUrl}
+              variant="primary"
+            />
+            {onRefreshServerUrl ? (
+              <Button
+                label="Refresh"
+                onPress={onRefreshServerUrl}
+                variant="ghost"
+              />
+            ) : null}
+          </View>
+          <Text style={styles.statusMuted}>
+            Current: {serverUrl || "Not configured"}
+          </Text>
+        </Section>
 
         {showWalletConnect ? (
           <Section title="Wallet">

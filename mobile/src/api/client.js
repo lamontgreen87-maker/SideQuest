@@ -95,3 +95,72 @@ export async function apiPostText(baseUrl, path, body, timeoutMs = 600000) { // 
     throw error;
   }
 }
+
+import EventSource from "react-native-sse";
+
+export function apiStream(baseUrl, path, body, callbacks) {
+  const { onMessage, onError, onFinish } = callbacks;
+  let es = null;
+
+  // We need to build headers async, but EventSource is sync constructor.
+  // We'll wrap the setup in an async IIFE.
+  (async () => {
+    try {
+      const headers = await buildHeaders();
+      const url = `${baseUrl}${path}`;
+
+      es = new EventSource(url, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      });
+
+      es.addEventListener("open", () => {
+        // connection opened
+      });
+
+      es.addEventListener("message", (event) => {
+        if (!event.data) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.ready) {
+            // stream starting
+            return;
+          }
+          if (payload.done) {
+            es.close();
+            if (onFinish) onFinish();
+            return;
+          }
+          if (payload.error) {
+            es.close();
+            if (onError) onError(new Error(payload.error));
+            return;
+          }
+          if (payload.delta && onMessage) {
+            onMessage(payload.delta);
+          }
+        } catch (err) {
+          console.warn("Stream parse error", err);
+        }
+      });
+
+      es.addEventListener("error", (event) => {
+        console.warn("SSE Error", event);
+        es.close();
+        if (onError) onError(new Error("Stream connection failed"));
+      });
+
+    } catch (err) {
+      if (onError) onError(err);
+    }
+  })();
+
+  // Return a cleanup/abort function
+  return () => {
+    if (es) {
+      es.removeAllEventListeners();
+      es.close();
+    }
+  };
+}

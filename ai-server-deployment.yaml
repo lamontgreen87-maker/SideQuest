@@ -1,0 +1,53 @@
+# ai-server-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-server
+  labels:
+    app: ai-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-server
+  template:
+    metadata:
+      labels:
+        app: ai-server
+    spec:
+      containers:
+        - name: ai-server
+          image: lamonster87/dungeoncrawler-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000   # FastAPI
+            - containerPort: 11434 # Ollama
+          env:
+            - name: MODEL_PATH
+              value: "/models"
+            - name: DATA_DIR
+              value: "/workspace"
+          volumeMounts:
+            - name: model-data
+              mountPath: /models
+      volumes:
+        - name: model-data
+          persistentVolumeClaim:
+            claimName: model-pvc
+---
+# ai-server-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-server
+spec:
+  selector:
+    app: ai-server
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+    - protocol: TCP
+      port: 11434
+      targetPort: 11434
+  type: ClusterIP

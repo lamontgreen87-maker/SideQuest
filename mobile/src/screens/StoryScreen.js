@@ -13,8 +13,9 @@ import {
   View,
 } from "react-native";
 import Button from "../components/Button";
-import { apiGet, apiPost } from "../api/client";
+import { apiGet, apiPost, apiStream } from "../api/client";
 import { INTRO_PROMPTS, STORAGE_KEYS } from "../config";
+
 import { getJson, removeItem, setJson } from "../storage";
 import { colors, radius, spacing } from "../theme";
 import { DEFAULT_ENEMIES, DEFAULT_PREMADES, DEFAULT_SPELLS } from "../data/dnd";
@@ -797,12 +798,64 @@ export default function StoryScreen({
     let id = null;
     try {
       id = await ensureSession();
+
+      if (!isContinueCommand) {
+        // STREAMING IMPLEMENTATION
+        // Add placeholder for AI response
+        setMessages((prev) => [...prev, makeMessage("assistant", "...")]);
+
+        let currentContent = "";
+
+        apiStream(serverUrl, `/api/sessions/${id}/stream`, {
+          message: payloadMessage,
+          fast: isRemoteServer ? true : undefined,
+        }, {
+          onMessage: (delta) => {
+            currentContent += delta;
+            setMessages((prev) => {
+              const list = [...prev];
+              const lastIdx = list.findIndex((_, i) => i === list.length - 1);
+              if (lastIdx === -1) return prev;
+              const last = list[lastIdx];
+              if (last.role === "assistant") {
+                // Replace the entire last message content
+                // Handle "..." placeholder case
+                if (last.content === "..." && currentContent) {
+                  list[lastIdx] = { ...last, content: currentContent };
+                } else {
+                  list[lastIdx] = { ...last, content: currentContent };
+                }
+                return list;
+              }
+              return prev;
+            });
+          },
+          onFinish: async () => {
+            setLoading(false);
+            // Refresh credits
+            try {
+              const me = await apiGet(serverUrl, "/api/me");
+              if (me.credits && onCreditsUpdate) onCreditsUpdate(me.credits);
+            } catch (e) { /* ignore */ }
+          },
+          onError: (err) => {
+            console.warn("Stream error", err);
+            setLoading(false);
+            setResendReady(true);
+            setResendMessage(payloadMessage);
+          }
+        });
+        return;
+      }
+
+      // Legacy/Continue Handling
       const response = await withHealthGuard(() => {
         if (isContinueCommand) {
           return apiPost(serverUrl, `/api/sessions/${id}/continue`, {
             fast: isRemoteServer ? true : undefined,
           });
         }
+        // Fallback or unreachable
         return apiPost(serverUrl, `/api/sessions/${id}/messages`, {
           message: payloadMessage,
           fast: isRemoteServer ? true : undefined,
@@ -850,7 +903,10 @@ export default function StoryScreen({
         if (onUnauthorized) onUnauthorized();
       }
     } finally {
-      setLoading(false);
+      if (isContinueCommand || !id) {
+        setLoading(false);
+      }
+      // For streaming, loading is cleared in onFinish/onError
     }
   }, [
     input,

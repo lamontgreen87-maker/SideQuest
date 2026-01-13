@@ -50,19 +50,51 @@ from rules import (
 )
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+@app.on_event("startup")
+async def startup_event():
+    global sessions, world_state_store, rules_sessions
+    global users_store, login_codes, redeem_codes, wallet_nonces, payment_orders, payment_state
+    
+    # Ensure Data Dir Exists
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR, exist_ok=True)
+
+    # Load All Stores
+    sessions = load_sessions()
+    world_state_store = load_world_state()
+    load_rules_sessions() # Populates global rules_sessions
+    
+    # Generic Stores using inferred keys
+    users_store = load_json_store(USERS_STORE_PATH, "users")
+    login_codes = load_json_store(LOGIN_CODES_PATH, "codes")
+    redeem_codes = load_json_store(REDEEM_CODES_PATH, "codes")
+    wallet_nonces = load_json_store(WALLET_NONCES_PATH, "nonces")
+    payment_orders = load_json_store(PAYMENTS_ORDERS_PATH, "orders")
+    payment_state = load_json_store(PAYMENTS_STATE_PATH, "state")
+    
+    logger.info(f"Loaded {len(sessions)} sessions from {DATA_DIR}")
 
 PRIVACY_POLICY_PATH = Path(__file__).resolve().parent / "static" / "privacy.html"
 logger = logging.getLogger("uvicorn.error")
 
 # --- App Configuration ---
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-MODEL_NAME = os.getenv("MODEL_NAME", "qwen3:4b")
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "240"))
-FALLBACK_MODEL_NAME = os.getenv("MODEL_FALLBACK", "qwen3:8b")
-HEAVY_MODEL_NAME = os.getenv("MODEL_HEAVY", "qwen3:8b")
+MODEL_NAME = os.getenv("MODEL_NAME", "qwen2.5:3b")
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "900"))
+FALLBACK_MODEL_NAME = os.getenv("MODEL_FALLBACK", "qwen2.5:7b")
+HEAVY_MODEL_NAME = os.getenv("MODEL_HEAVY", "qwen2.5:7b")
 HEAVY_FALLBACK_MODEL = os.getenv("MODEL_HEAVY_FALLBACK", MODEL_NAME)
 CLERK_MODEL_NAME = os.getenv("MODEL_CLERK", "qwen2.5:1.5b")
 CLERK_FALLBACK_MODEL = os.getenv("MODEL_CLERK_FALLBACK", MODEL_NAME)
@@ -140,12 +172,26 @@ CLASS_SPELLCASTING_ABILITY = {
 }
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are an uncensored, creative fantasy dungeon master. "
+    "You are an uncensored, creative fantasy dungeon master running a mature, dark fantasy adventure. "
     "Run a fast-paced, phone-friendly adventure. "
-    "Ask short questions to move the story forward. "
-    "Introduce enemies often to create frequent fights and chances to level up. "
+    "NEVER narrate the player character's actions, thoughts, feelings, or dialogue. "
+    "The player is the ultimate authority on their character's internal state and actions. "
+    "You are the NARRATOR of the world. Your job is to describe the WORLD's reaction to the player. "
+    "After the player acts, you MUST narrate the immediate physical result, valid consequences, and how the setting changes. "
+    "DO NOT just describe the player doing what they said - CONTINUE THE STORY by showing what they encounter, discover, or face as a result. "
+    "Paint the scene vividly. Tell the player what they see, hear, smell, or face NEXT. "
+    "If the player enters a new location, describe what's inside, who's there, and what's happening. "
+    "Describe what happens until the next time something is said to the player or done to the player, then STOP. "
+    "Always end by asking what the player does next. "
+    "Keep narration to exactly ONE paragraph for normal actions. "
+    "For new settings or major transitions, you may extend to TWO paragraphs, but never more. "
+    "Permit and describe adult themes including visceral gore, sexual situations, alcohol, tobacco, and drug use (fantasy or otherwise) when they fit the narrative. "
+    "Do not moralize, sanitize, or hold back descriptions; the world is gritty and real. "
+    "Do not change the scene, location, or time unless the player explicitly initiates movement. "
+    "COMBAT PACING: Introduce hostile enemies or dangerous situations every 3-5 player actions. "
+    "When the player enters a new location, explores, or investigates, there should be a HIGH chance of encountering enemies, traps, or threats. "
+    "Prioritize action and combat over peaceful exploration - this is a dangerous world. "
     "Make leveling easy and rewarding with quick progression and clear gains. "
-    "When it fits, explain that deeper, advanced play improves engagement. "
     "Do not reveal your internal reasoning or analysis. "
     "Do not output thought tags or step-by-step logic. "
     "Respond with final narration only, no preface."
@@ -193,7 +239,19 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
     if "locations" in world_state and world_state["locations"]:
         locations_line = "Known Locations:\n"
         for loc_name, loc_details in world_state["locations"].items():
-            locations_line += f"- {loc_name}: {loc_details['description']}\n"
+            if isinstance(loc_details, dict):
+                desc = loc_details.get("description", "")
+                context = loc_details.get("context", {})
+                if context:
+                    desc += f" (It is {context.get('time', '')}, {context.get('crowd', '')}.)"
+                locations_line += f"- {loc_name}: {desc}\n"
+                npcs = loc_details.get("npcs", [])
+                if npcs:
+                    locations_line += f"  NPCs at {loc_name}:\n"
+                    for npc in npcs:
+                        locations_line += f"    * {npc.get('name')} ({npc.get('role')}): {npc.get('description')} [Base Disposition: {npc.get('disposition_score', 7)}]\n"
+            else:
+                locations_line += f"- {loc_name}: {loc_details}\n"
     staged_lore_line = ""
     if "staged_lore" in world_state and world_state["staged_lore"]:
         staged_lore_line = "Staged Lore (you can introduce these elements into the story):\n"
@@ -222,6 +280,7 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         + loot_line
         + locations_line
         + staged_lore_line
+        + (f"SOCIAL REACTION: {state.get('social_result')}\n" if state.get("social_result") else "")
         + ("Campaign brief:\n" + final_campaign_summary + "\n" if final_campaign_summary else "")
         + ("World summary:\n" + world_summary + "\n" if world_summary else "")
         + "Game state JSON:\n"
@@ -230,10 +289,17 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         + safe_world
     )
 
+def strip_prefixes(text: str) -> str:
+    # Remove common prefixes from AI models
+    pattern = r"^(?:narration|story|game\s*master|dm|system|assistant|response|answer)\s*:?\s*"
+    # Apply regex using multiline flag to catch start of string or start of line if model outputs header
+    text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+    return text
+
 def split_narration_hint(text: str) -> Tuple[str, Optional[str]]:
     hint = None
     kept = []
-    # Regex for "narration_hint:" or "narration hint:" or "[narration hint]" case insensitive
+    # Relaxed Regex for "narration_hint" to catch unbracketed versions
     hint_pattern = re.compile(r"^(?:\[?\s*narration[_\s]+hint\s*\]?\s*:?)(.*)$", re.IGNORECASE)
     
     for line in text.splitlines():
@@ -242,15 +308,7 @@ def split_narration_hint(text: str) -> Tuple[str, Optional[str]]:
         if match:
             # We found a hint line
             content_after = match.group(1).strip()
-            # If there is content after, it might be the hint value OR mixed content
-            # The prompt asks for "NARRATION_HINT: narrate", so content_after should be 'narrate' or 'skip'
-            # If it's long, it might be leaked story text on the same line: "NARRATION_HINT: The door opens..."
-            # We'll try to save the story part if it looks like story.
-            
-            # Simple heuristic: if the content is just 'narrate' or 'skip' (or similar short token), treat as hint.
-            # If it's longer, assume it's story text leaked on the same line.
-            
-            if len(content_after) < 20: 
+            if len(content_after) < 30: 
                 # Likely just the hint value
                 if content_after:
                    hint = content_after.lower()
@@ -259,12 +317,15 @@ def split_narration_hint(text: str) -> Tuple[str, Optional[str]]:
                 # Likely "NARRATION_HINT: The door opens..."
                 # We want to keep "The door opens..."
                 kept.append(content_after)
-                # We can't validly extract the hint value easily here without potentially eating first words of story.
-                # safely assume narrate if we have text.
                 hint = "narrate" 
         else:
             kept.append(line)
-    return ("\n".join(kept).strip(), hint)
+            
+    # Join and then strip prefixes from the final result to clean up any "NARRATION:" tags that were part of the story body
+    final_text = "\n".join(kept).strip()
+    final_text = strip_prefixes(final_text)
+    
+    return (final_text, hint)
 
 if CORS_ORIGINS == "*":
     allow_origins = ["*"]
@@ -536,40 +597,44 @@ class PlayPurchaseResponse(BaseModel):
 
 sessions: Dict[str, Dict[str, Any]] = {}
 rules_sessions: Dict[str, RulesSession] = {}
-SESSIONS_STORE_PATH = os.getenv("SESSIONS_STORE_PATH", os.path.join(os.path.dirname(__file__), "sessions_store.json"))
+DATA_DIR = os.getenv("DATA_DIR", os.path.dirname(__file__))
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+SESSIONS_STORE_PATH = os.getenv("SESSIONS_STORE_PATH", os.path.join(DATA_DIR, "sessions_store.json"))
 WORLD_STORE_PATH = os.getenv(
-    "WORLD_STORE_PATH", os.path.join(os.path.dirname(__file__), "world_state_store.json")
+    "WORLD_STORE_PATH", os.path.join(DATA_DIR, "world_state_store.json")
 )
-RULES_STORE_PATH = os.getenv("RULES_STORE_PATH", os.path.join(os.path.dirname(__file__), "rules_store.json"))
+RULES_STORE_PATH = os.getenv("RULES_STORE_PATH", os.path.join(DATA_DIR, "rules_store.json"))
 CHARACTER_STORE_PATH = os.getenv(
-    "CHARACTER_STORE_PATH", os.path.join(os.path.dirname(__file__), "characters_store.json")
+    "CHARACTER_STORE_PATH", os.path.join(DATA_DIR, "characters_store.json")
 )
 BESTIARY_SRD_PATH = os.getenv(
     "BESTIARY_SRD_PATH", os.path.join(os.path.dirname(__file__), "bestiary_srd.json")
 )
 BESTIARY_CUSTOM_PATH = os.getenv(
-    "BESTIARY_CUSTOM_PATH", os.path.join(os.path.dirname(__file__), "bestiary_custom.json")
+    "BESTIARY_CUSTOM_PATH", os.path.join(DATA_DIR, "bestiary_custom.json")
 )
 SPELLS_SRD_PATH = os.getenv(
     "SPELLS_SRD_PATH", os.path.join(os.path.dirname(__file__), "spells_srd.json")
 )
 USERS_STORE_PATH = os.getenv(
-    "USERS_STORE_PATH", os.path.join(os.path.dirname(__file__), "users_store.json")
+    "USERS_STORE_PATH", os.path.join(DATA_DIR, "users_store.json")
 )
 LOGIN_CODES_PATH = os.getenv(
-    "LOGIN_CODES_PATH", os.path.join(os.path.dirname(__file__), "login_codes.json")
+    "LOGIN_CODES_PATH", os.path.join(DATA_DIR, "login_codes.json")
 )
 REDEEM_CODES_PATH = os.getenv(
-    "REDEEM_CODES_PATH", os.path.join(os.path.dirname(__file__), "redeem_codes.json")
+    "REDEEM_CODES_PATH", os.path.join(DATA_DIR, "redeem_codes.json")
 )
 WALLET_NONCES_PATH = os.getenv(
-    "WALLET_NONCES_PATH", os.path.join(os.path.dirname(__file__), "wallet_nonces.json")
+    "WALLET_NONCES_PATH", os.path.join(DATA_DIR, "wallet_nonces.json")
 )
 PAYMENTS_ORDERS_PATH = os.getenv(
-    "PAYMENTS_ORDERS_PATH", os.path.join(os.path.dirname(__file__), "payments_orders.json")
+    "PAYMENTS_ORDERS_PATH", os.path.join(DATA_DIR, "payments_orders.json")
 )
 PAYMENTS_STATE_PATH = os.getenv(
-    "PAYMENTS_STATE_PATH", os.path.join(os.path.dirname(__file__), "payments_state.json")
+    "PAYMENTS_STATE_PATH", os.path.join(DATA_DIR, "payments_state.json")
 )
 custom_characters: Dict[str, Dict[str, Any]] = {}
 custom_bestiary: Dict[str, Dict[str, Any]] = {}
@@ -1581,13 +1646,13 @@ def build_ollama_options(fast: bool) -> Dict[str, Any]:
     if fast:
         return {
             **base,
-            "num_predict": 140,
+            "num_predict": 256,
             "temperature": 0.6,
         }
     return {
         **base,
-        "num_predict": 360,
-        "temperature": 0.9,
+        "num_predict": 2048,
+        "temperature": 0.75,
     }
 
 def get_rules_session_or_404(session_id: str) -> RulesSession:
@@ -1794,16 +1859,24 @@ def build_avoid_repeat_messages(messages: List[Dict[str, str]]) -> List[Dict[str
     ]
 
 def strip_thoughts(text: str) -> str:
+    # Remove entire thought blocks <think>...</think> including newlines
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    
+    # Remove lingering markers if any
     markers = ["<think>", "</think>", "Thought:", "Reasoning:", "Analysis:"]
     cleaned = text
     for marker in markers:
         cleaned = cleaned.replace(marker, "")
+        
     cleaned = re.sub(r"\bd&d\b", "the campaign", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bdungeons?\s*&\s*dragons?\b", "the campaign", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"(?i)you said\s*:\s*\"?[^\n]+\"?", "", cleaned)
-    cleaned = re.sub(r"(?im)^\\s*you said[^\\n]*\\n?", "", cleaned)
+    cleaned = re.sub(r"(?im)^\s*you said[^\n]*\n?", "", cleaned)
     cleaned = re.sub(r"(?i)you said[^.!?]*[.!?]?", "", cleaned)
-    cleaned = cleaned.strip()
+    
+    # Compress multiple newlines which might create "separate bubble" effects
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    
     return cleaned.strip()
 
 def strip_state_leaks(text: str, state: Dict[str, Any], world_state: Dict[str, Any]) -> str:
@@ -2002,22 +2075,66 @@ async def clerk_update_state(
             world_state["locations"] = {}
         for location_name in new_locations:
             if location_name not in world_state["locations"]:
-                async def _background_task(loc_name):
-                    details = await _build_location_details(loc_name, world_state)
-                    if details:
-                        # Re-fetch world_state to avoid race conditions
-                        current_world_state = ensure_world_state(session_id)
-                        if "locations" not in current_world_state:
-                            current_world_state["locations"] = {}
-                        current_world_state["locations"][loc_name] = {
-                            "description": details,
-                            "created_at": stamp_now(),
-                        }
-                        world_state_store[session_id] = current_world_state
-                        persist_world_state()
-                        log_clerk_event(f"location_details added for {loc_name} in session {session_id}")
+                 # BLOCKING: Wait for bestiary/world generation so Narrator has context
+                log_clerk_event(f"Blocking for world gen: {location_name}")
+                details = await _build_location_details(location_name, world_state)
+                if details:
+                    if "locations" not in world_state:
+                        world_state["locations"] = {}
+                    world_state["locations"][location_name] = details
+                    # Update local state too so current turn sees it
+                    next_state["updated_at"] = stamp_now()
+                    log_clerk_event(f"World gen complete: {location_name}")
 
-                asyncio.create_task(_background_task(location_name))
+    # SOCIAL COMBAT SYSTEM
+    # Naive check: does input verify simple interaction with known NPC?
+    # We can refine this by letting Clerk LLM identify the target, but for "hybrid" speed/robustness:
+    social_result = None
+    known_npcs = {}
+    if "locations" in world_state:
+        for loc_data in world_state["locations"].values():
+             if isinstance(loc_data, dict):
+                 for npc in loc_data.get("npcs", []):
+                     known_npcs[npc["name"].lower()] = npc
+    
+    target_npc = None
+    for name, npc_data in known_npcs.items():
+        if name in user_input.lower():
+             target_npc = npc_data
+             break
+    
+    if target_npc:
+        # Perform Reaction Roll
+        # 2d6 + CHA Mod
+        cha_score = state.get("character", {}).get("abilities", {}).get("cha", 10)
+        roll = roll_dice(2, 6) + ability_mod(cha_score)
+        
+        # Compare to NPC Base Disposition
+        base = target_npc.get("disposition_score", 7)
+        
+        # Simple Difficulty Class logic: 
+        # Roll result < Base-2 => Degrading/Hostile
+        # Roll result > Base+2 => Improving/Friendly
+        # Else => Status Quo
+        
+        # Actually user wants Result to DETERMINE attitude:
+        # 2-5: Hostile, 6-8: Neutral, 9+: Friendly.
+        # Let's adjust by NPC base disposition (offset from 7).
+        offset = base - 7
+        final_score = roll + offset
+        
+        attitude = "Neutral"
+        if final_score <= 5:
+            attitude = "Hostile (Rude, dismissive, or aggressive)"
+        elif final_score >= 9:
+            attitude = "Friendly (Helpful, open, or warm)"
+        
+        social_result = f"Interaction with {target_npc['name']}. Reaction Roll: {final_score} ({roll} + {offset} offset). Result: {attitude}."
+        next_state["social_result"] = social_result
+    else:
+        # Clear previous social result if no NPC interaction detected
+        if "social_result" in next_state:
+             del next_state["social_result"]
 
     updated_world, encounter = maybe_trigger_encounter(next_state, world_state)
     
@@ -2255,7 +2372,7 @@ async def _build_campaign_brief_from_world(
                 "Write a compact campaign brief in 2-3 sentences. "
                 "Include: setting, central threat, and an immediate opening problem. "
                 "Mature themes are allowed "
-                "(violence, horror, moral ambiguity), but avoid explicit sexual content. "
+                "(violence, horror, intimacy, moral ambiguity). "
                 "Keep it punchy and gameable."
             ),
         },
@@ -2497,12 +2614,72 @@ async def world_enhancer_loop() -> None:
                 logger.warning(f"World enhancer error for session {session_id}: {exc}")
 
 
-async def _build_location_details(location_name: str, world_state: Dict[str, Any]) -> str:
+
+def _generate_scene_context() -> Dict[str, str]:
+    days = ["Moonday", "Tovday", "Wensday", "Thorsday", "Freeday", "Starday", "Sunday"]
+    times = ["Dawn", "Morning", "High Noon", "Afternoon", "Dusk", "Evening", "Midnight", "Witching Hour"]
+    crowds = ["Empty", "Sparse", "Quiet", "Moderate", "Busy", "Packed", "Overflowing"]
+    atmospheres = ["Tense", "Jovial", "Somber", "Chaotic", "Peaceful", "Eerie", "Festive", "Gloom"]
+    
+    return {
+        "day": random.choice(days),
+        "time": random.choice(times),
+        "crowd": random.choice(crowds),
+        "atmosphere": random.choice(atmospheres),
+    }
+
+async def _build_npc_roster(location_name: str, context: Dict[str, str], world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    campaign_summary = ""
+    campaign = world_state.get("campaign")
+    if isinstance(campaign, dict):
+        campaign_summary = str(campaign.get("summary") or "").strip()
+        
+    prompt = (
+        f"Create a roster of 3-5 distinct NPCs for a setting: {location_name}.\n"
+        f"Context: It is {context['time']} on {context['day']}. The place is {context['crowd']} and {context['atmosphere']}.\n"
+        f"Campaign Context: {campaign_summary}\n"
+        "For EACH NPC, provide:\n"
+        "1. Name and Role (e.g., Bartender, Patron, Spy)\n"
+        "2. Appearance and Mannerism (1 sentence)\n"
+        "3. Motivation (Why are they here right now?)\n"
+        "4. Secret (Something they won't reveal without a bribe or high trust)\n"
+        "5. Relationships (One connection to another NPC in this list, and thoughts on the Player if applicable)\n"
+        "6. Disposition Score (A number from 2 to 12. 2=Hostile, 7=Neutral, 12=Friendly)\n"
+        "Output in JSON format: [{ 'name': '...', 'role': '...', 'description': '...', 'motivation': '...', 'secret': '...', 'relationships': '...', 'disposition_score': 7 }, ...]"
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a master NPC generator. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(
+                messages, 
+                fast=False, 
+                model_name=HEAVY_MODEL_NAME, 
+                fallback_model=HEAVY_FALLBACK_MODEL
+            ), 
+            timeout=90
+        )
+        # Attempt to parse JSON from the response
+        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+        return []
+    except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
+        logger.warning(f"NPC generation failed for {location_name}: {e}")
+        return []
+
+async def _build_location_details(location_name: str, world_state: Dict[str, Any]) -> Dict[str, Any]:
     world_summary = str(world_state.get("summary") or "").strip()
     campaign_summary = ""
     campaign = world_state.get("campaign")
     if isinstance(campaign, dict):
         campaign_summary = str(campaign.get("summary") or "").strip()
+
+    context = _generate_scene_context()
 
     messages = [
         {
@@ -2519,19 +2696,19 @@ async def _build_location_details(location_name: str, world_state: Dict[str, Any
                 f"{campaign_summary or 'None'}\n\n"
                 "Current world summary:\n"
                 f"{world_summary or 'None'}\n\n"
-                f"Location Name: {location_name}\n\n"
+                f"Location Name: {location_name}\n"
+                f"Scene Context: {context['time']} on {context['day']}. Crowd: {context['crowd']}. Atmosphere: {context['atmosphere']}.\n\n"
                 "Instructions:\n"
-                "- Generate a 3-5 sentence description of the location's history, appearance, and notable features.\n"
-                "- Include sensory details: What does it smell like? What sounds can be heard? What is the lighting like?\n"
-                "- Include a secret about the location that the players can discover.\n"
-                "- Suggest a potential NPC that can be found at this location.\n"
-                "- The description should be evocative and provide hooks for future adventures.\n"
-                "- Output only the description of the location.\n"
+                "- Generate a 2 paragraph description of the location, incorporating the specific time, crowd, and atmosphere.\n"
+                "- Include sensory details: smells, sounds, lighting.\n"
+                "- Mention specific details that hint at the generated context (e.g. if crowded, noise; if empty, silence).\n"
+                "- Include a secret or hidden detail about the location itself.\n"
+                "- Output only the description text.\n"
             ),
         },
     ]
     try:
-        text = strip_thoughts(
+        description = strip_thoughts(
             (
                 await asyncio.wait_for(
                     ollama_chat_with_model(
@@ -2546,8 +2723,18 @@ async def _build_location_details(location_name: str, world_state: Dict[str, Any
         )
     except asyncio.TimeoutError:
         log_clerk_event(f"location_details timeout for {location_name}")
-        return ""
-    return text
+        return {}
+        
+    # Generate NPCs
+    npcs = await _build_npc_roster(location_name, context, world_state)
+    
+    return {
+        "description": description,
+        "context": context,
+        "npcs": npcs,
+        "created_at": stamp_now()
+    }
+
 
 
 async def _build_npc_details(npc_name: str, world_state: Dict[str, Any]) -> str:
@@ -2616,13 +2803,21 @@ async def generate_intro_story(
     campaign = world_state.get("campaign")
     if isinstance(campaign, dict):
         campaign_summary = str(campaign.get("summary") or "").strip()
+    
+    settings = [
+        "a sunless citadel", "a flooded mine", "a ruined watchtower", "a cursed forest",
+        "a mountain pass", "an ancient crypt", "a sewers network", "a frozen wasteland",
+        "a crumbling temple", "a fog-shrouded swamp"
+    ]
+    setting = random.choice(settings)
+    
     prompt = (
-        "Write an opening scene for a dungeon crawl (exactly 2 sentences). "
+        f"Write an opening scene for a dungeon crawl set in {setting} (exactly 2 sentences). "
         "Make it vivid and specific with a clear hook, then end with a direct question. "
         "Include a hint of danger and wonder. "
         + identity
         + (" Campaign brief: " + campaign_summary if campaign_summary else "")
-        + " Avoid clichAc tavern starts."
+        + " Avoid cliche tavern starts."
     ).strip()
     messages = [
         {"role": "system", "content": build_story_system_prompt(state, world_state)},
@@ -2663,7 +2858,7 @@ async def generate_intro_story(
     if retry:
         return strip_state_leaks(retry, state, world_state)
     log_clerk_event("intro_story empty fallback")
-    return build_campaign_intro_fallback(world_state, name, klass)
+    return pick_intro_fallback()
 
 async def generate_clerk_intro_fast(
     state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str
@@ -2983,6 +3178,8 @@ async def stream_response(
     async def event_stream() -> AsyncGenerator[str, None]:
         assistant_parts: List[str] = []
         in_think = False
+        prefix_checked = False
+        buffer = ""
         yield "data: {\"ready\": true}\n\n"
         try:
             async for chunk in ollama_stream(session["messages"], fast):
@@ -3009,13 +3206,33 @@ async def stream_response(
                         continue
                 cleaned = cleaned.replace("</think>", "").replace("<think>", "")
                 if cleaned:
-                    assistant_parts.append(cleaned)
-                    data = json.dumps({"delta": cleaned})
-                    yield f"data: {data}\n\n"
+                    if not prefix_checked:
+                        buffer += cleaned
+                        if len(buffer) > 25:
+                            stripped = strip_prefixes(buffer)
+                            prefix_checked = True
+                            if stripped:
+                                assistant_parts.append(stripped)
+                                data = json.dumps({"delta": stripped})
+                                yield f"data: {data}\n\n"
+                            buffer = ""
+                    else:
+                        assistant_parts.append(cleaned)
+                        data = json.dumps({"delta": cleaned})
+                        yield f"data: {data}\n\n"
         except httpx.HTTPError as exc:
             data = json.dumps({"error": f"Ollama error: {exc}"})
             yield f"data: {data}\n\n"
             return
+            
+        # Flush any remaining buffer if we never hit the threshold
+        if not prefix_checked and buffer:
+             stripped = strip_prefixes(buffer)
+             if stripped:
+                 assistant_parts.append(stripped)
+                 data = json.dumps({"delta": stripped})
+                 yield f"data: {data}\n\n"
+                 
         response_text = "".join(assistant_parts).strip()
         response_text = strip_thoughts(response_text)
         if count_words(response_text) < (18 if fast else 28):
@@ -3425,6 +3642,20 @@ async def import_session(payload: ImportSessionRequest, user: Dict[str, Any] = D
     ensure_world_state(session_id)
     persist_sessions()
     return CreateSessionResponse(session_id=session_id)
+
+@app.get("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
+async def get_session_details(session_id: str, user: Dict[str, Any] = Depends(require_auth)):
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+@app.get("/api/sessions/{session_id}/messages", dependencies=[Depends(verify_api_key)])
+async def get_session_messages_list(session_id: str, user: Dict[str, Any] = Depends(require_auth)):
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.get("messages", [])
 
 @app.post(
     "/api/sessions/{session_id}/messages",

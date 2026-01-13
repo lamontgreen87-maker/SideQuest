@@ -231,7 +231,7 @@ Add-Content -Path $stdoutPath -Value ("[{0}] logging to {1} and {2}" -f (Get-Dat
 Add-Content -Path $stdoutPath -Value ("[{0}] starting {1} {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $pythonPath, $argString)
 
 try {
-    $proc = Start-Process -FilePath $pythonPath -ArgumentList $argString -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+    $proc = Start-Process -FilePath $pythonPath -ArgumentList $argString -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
     if ($proc) {
         Wait-Process -Id $proc.Id
     }

@@ -307,26 +307,44 @@ export default function App() {
   }, []);
 
   const saveServerUrl = useCallback(async () => {
-    if (isLocalUrl(serverUrl)) {
-      setWalletStatus((prev) => ({
-        ...prev,
-        healthError: "Local servers are disabled. Use the online server.",
-      }));
-      setServerUrl(PROD_SERVER_URL);
-      await setItem(STORAGE_KEYS.serverUrl, PROD_SERVER_URL);
-      return;
+    try {
+      await setItem(STORAGE_KEYS.serverUrl, serverUrl);
+      Alert.alert("Server URL Saved", `Server URL set to: ${serverUrl}`);
+      checkHealth(serverUrl);
+    } catch (error) {
+      Alert.alert("Save Failed", error?.message || "Could not save server URL.");
     }
-    await setItem(STORAGE_KEYS.serverUrl, serverUrl);
-    checkHealth(serverUrl);
   }, [serverUrl, checkHealth]);
 
-  const applyServerUrl = useCallback(() => {
-    // No-op to prevent manual overrides
-  }, []);
+  const applyServerUrl = useCallback(async (url) => {
+    setServerUrl(url);
+    await setItem(STORAGE_KEYS.serverUrl, url);
+    checkHealth(url);
+  }, [checkHealth]);
 
-  const refreshServerUrl = useCallback(() => {
-    // No-op to prevent dynamic refreshes
-  }, []);
+  const refreshServerUrl = useCallback(async () => {
+    if (!GIST_CONFIG_URL) {
+      Alert.alert("Refresh Unavailable", "No gist URL configured.");
+      return;
+    }
+    try {
+      const response = await fetch(GIST_CONFIG_URL);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch gist: ${response.status}`);
+      }
+      const data = await response.json();
+      if (data?.serverUrl) {
+        setServerUrl(data.serverUrl);
+        await setItem(STORAGE_KEYS.serverUrl, data.serverUrl);
+        Alert.alert("Server URL Updated", `Fetched from gist: ${data.serverUrl}`);
+        checkHealth(data.serverUrl);
+      } else {
+        throw new Error("Gist does not contain serverUrl field.");
+      }
+    } catch (error) {
+      Alert.alert("Refresh Failed", error?.message || "Could not fetch server URL from gist.");
+    }
+  }, [checkHealth]);
 
   const signInWithWallet = useCallback(async () => {
     if (!address || !provider) {

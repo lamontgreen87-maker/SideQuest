@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/
  WORKDIR /app
    
     # Copy and install Python dependencies
-    COPY requirements.txt .
+    COPY backend/requirements.txt .
     RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
    
     # Copy the rest of your application code
@@ -27,8 +27,8 @@ RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/
     # Create a script to start both services
     RUN echo '#!/bin/sh' > /entrypoint.sh && \
         echo 'ollama serve &' >> /entrypoint.sh && \
-        echo 'sleep 5' >> /entrypoint.sh && \
-        echo 'uvicorn main:app --host 0.0.0.0 --port 8000' >> /entrypoint.sh && \
+        echo 'sleep 60' >> /entrypoint.sh && \
+        echo 'cd /app/backend && uvicorn main:app --host 0.0.0.0 --port 8000' >> /entrypoint.sh && \
         chmod +x /entrypoint.sh
    
     # Set the entrypoint script as the command to run
