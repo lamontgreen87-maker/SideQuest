@@ -4,7 +4,7 @@ import Button from "../components/Button";
 import Field from "../components/Field";
 import Section from "../components/Section";
 import Screen from "../components/Screen";
-import { colors, spacing } from "../theme";
+import { theme } from "../theme";
 
 export default function AuthScreen({
   serverUrl,
@@ -25,15 +25,25 @@ export default function AuthScreen({
   accountLabel,
   showWalletConnect = true,
   showGoogleSignIn = false,
+  onEmailSignIn,
+  onEmailRegister,
+  onViewSessions,
 }) {
   const isBusy = authStatus?.loading;
   const connectedAddress = walletStatus?.address || walletAddress;
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [showEmail, setShowEmail] = React.useState(false);
 
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Side Quest</Text>
-        <Text style={styles.subtitle}>Connect your wallet to continue.</Text>
+        <View style={styles.header}>
+          <Text style={styles.title}>Side Quest</Text>
+          <Text style={styles.subtitle}>
+            {showWalletConnect ? "Connect your wallet or sign in." : "Sign in to start your adventure."}
+          </Text>
+        </View>
 
         <Section title="Server Configuration">
           <Field
@@ -79,27 +89,84 @@ export default function AuthScreen({
             <Text style={styles.statusMuted}>
               {connectedAddress ? `Wallet: ${connectedAddress}` : "No wallet connected"}
             </Text>
-            <Text style={styles.statusMuted}>
-              Account: {accountLabel || "Guest"}
-            </Text>
-            <View style={styles.row}>
-              <Button
-                label={isBusy ? "Signing In..." : "Sign In"}
-                onPress={onSignIn}
-                disabled={!connectedAddress || isBusy}
-              />
-              <Button
-                label={isBusy ? "Signing In..." : "Sign In as Guest"}
-                onPress={onGuestSignIn}
-                variant="ghost"
-                disabled={isBusy}
-              />
-            </View>
-            {authStatus?.error ? (
-              <Text style={styles.statusError}>{authStatus.error}</Text>
-            ) : null}
           </Section>
         ) : null}
+
+        <Section title="Account">
+          <Text style={styles.statusMuted}>
+            Account: {accountLabel || "Not signed in"}
+          </Text>
+
+          {!accountLabel && (
+            <>
+              <View style={styles.row}>
+                <Button
+                  label={isBusy ? "Signing In..." : "Play as Guest"}
+                  onPress={onGuestSignIn}
+                  disabled={isBusy}
+                  variant={showEmail ? "ghost" : "primary"}
+                />
+                <Button
+                  label="Email Login"
+                  onPress={() => setShowEmail(!showEmail)}
+                  variant={showEmail ? "primary" : "ghost"}
+                />
+              </View>
+
+              {showEmail && (
+                <View style={{ gap: theme.spacing.md, marginTop: theme.spacing.sm }}>
+                  <Field
+                    label="Email"
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="hero@adventure.com"
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                  />
+                  <Field
+                    label="Password"
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="Secret password"
+                    secureTextEntry
+                  />
+                  <View style={styles.row}>
+                    <Button
+                      label={isBusy ? "Logging in..." : "Log In"}
+                      onPress={() => onEmailSignIn(email, password)}
+                      disabled={isBusy || !email || !password}
+                    />
+                    <Button
+                      label={isBusy ? "Registering..." : "Register"}
+                      onPress={() => onEmailRegister(email, password)}
+                      disabled={isBusy || !email || !password}
+                      variant="ghost"
+                    />
+                  </View>
+                </View>
+              )}
+            </>
+          )}
+
+          {accountLabel && (
+            <View style={{ gap: theme.spacing.md }}>
+              <Button
+                label="My Campaigns"
+                onPress={onViewSessions}
+                variant="primary"
+              />
+              <Button
+                label="Sign Out"
+                onPress={onDisconnect} // Using disconnect for generic sign out
+                variant="danger"
+              />
+            </View>
+          )}
+
+          {authStatus?.error ? (
+            <Text style={styles.statusError}>{authStatus.error}</Text>
+          ) : null}
+        </Section>
 
         {showGoogleSignIn ? (
           <Section title="Google">
@@ -109,19 +176,7 @@ export default function AuthScreen({
                 onPress={onGoogleSignIn}
                 disabled={isBusy}
               />
-              <Button
-                label={isBusy ? "Signing In..." : "Sign In as Guest"}
-                onPress={onGuestSignIn}
-                variant="ghost"
-                disabled={isBusy}
-              />
             </View>
-            <Text style={styles.statusMuted}>
-              Account: {accountLabel || "Guest"}
-            </Text>
-            {authStatus?.error ? (
-              <Text style={styles.statusError}>{authStatus.error}</Text>
-            ) : null}
           </Section>
         ) : null}
 
@@ -150,39 +205,52 @@ export default function AuthScreen({
 
 const styles = StyleSheet.create({
   content: {
-    padding: spacing.lg,
-    gap: spacing.lg,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.lg,
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: theme.spacing.sm,
   },
   title: {
-    color: colors.parchment,
-    fontSize: 30,
-    fontWeight: "700",
-    letterSpacing: 1,
+    color: theme.colors.gold,
+    fontSize: 36,
+    fontFamily: theme.fonts.header,
+    textShadowColor: 'rgba(0, 0, 0, 0.7)',
+    textShadowOffset: { width: 1, height: 2 },
+    textShadowRadius: 3,
+    marginBottom: theme.spacing.xs,
   },
   subtitle: {
-    color: colors.mutedGold,
-    marginTop: -8,
+    color: theme.colors.textMuted,
+    fontFamily: theme.fonts.body,
+    fontSize: 16,
+    textAlign: 'center',
   },
   row: {
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: theme.spacing.sm,
     flexWrap: "wrap",
-    marginBottom: spacing.sm,
+    marginBottom: theme.spacing.sm,
   },
   statusOk: {
-    color: colors.success,
+    color: theme.colors.emerald,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
   },
   statusError: {
-    color: colors.accent,
-    fontSize: 12,
+    color: theme.colors.crimson,
+    fontSize: 14,
+    fontFamily: theme.fonts.body,
   },
   statusWarn: {
-    color: colors.warning,
+    color: theme.colors.warning,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
   },
   statusMuted: {
-    color: colors.mutedGold,
+    color: theme.colors.textMuted,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
   },
 });

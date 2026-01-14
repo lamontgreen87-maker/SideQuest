@@ -13,11 +13,13 @@ import {
   View,
 } from "react-native";
 import Button from "../components/Button";
+import { DispositionMeter } from "../components/DispositionMeter";
+import { FantasyCard } from "../components/FantasyCard";
 import { apiGet, apiPost, apiStream } from "../api/client";
 import { INTRO_PROMPTS, STORAGE_KEYS } from "../config";
 
 import { getJson, removeItem, setJson } from "../storage";
-import { colors, radius, spacing } from "../theme";
+import { theme } from "../theme";
 import { DEFAULT_ENEMIES, DEFAULT_PREMADES, DEFAULT_SPELLS } from "../data/dnd";
 
 const storyCache = {
@@ -184,6 +186,7 @@ export default function StoryScreen({
       ),
     [makeId]
   );
+  const [attraction, setAttraction] = useState(0);
   const [sessionId, setSessionId] = useState(storyCache.sessionId);
   const [messages, setMessages] = useState(
     storyCache.messages.length ? normalizeMessages(storyCache.messages) : []
@@ -361,8 +364,11 @@ export default function StoryScreen({
         }
       };
       const nextInventory = response?.game_state?.inventory;
-      if (Array.isArray(nextInventory)) {
-        setInventoryItems(nextInventory);
+      setInventoryItems(nextInventory);
+
+      const nextAttraction = response?.game_state?.attraction_score;
+      if (typeof nextAttraction === 'number') {
+        setAttraction(nextAttraction);
       }
       if (Array.isArray(response?.response_parts) && response.response_parts.length) {
         response.response_parts.forEach((part) => {
@@ -537,14 +543,14 @@ export default function StoryScreen({
       return;
     }
     setAdventureLoading(true);
-    const intro = await getIntro();
+    const intro = await getIntro(internalCharacter?.name, internalCharacter?.klass);
     setTimeout(() => {
       setMessages([makeMessage("assistant", intro)]);
       setRulesSeeded(true);
       setAdventureLoading(false);
       introRequestRef.current = { key: introKey, inFlight: false };
     }, 900);
-  }, [characterEntry, getIntro, makeMessage, normalizeMessages, messages.length]);
+  }, [characterEntry, getIntro, makeMessage, normalizeMessages, messages.length, internalCharacter]);
 
   useEffect(() => {
     loadSession();
@@ -1437,9 +1443,10 @@ export default function StoryScreen({
   return (
     <View style={styles.root}>
       <View style={styles.chatArea}>
+        <DispositionMeter score={attraction} label="Attraction" />
         <FlatList
           ref={listRef}
-          data={data}
+          data={messages}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <View
@@ -1737,233 +1744,254 @@ export default function StoryScreen({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    minHeight: 0,
-    paddingTop: spacing.lg,
-    paddingHorizontal: 0,
-    paddingBottom: DRAWER_COLLAPSED_HEIGHT + spacing.lg,
-    width: "100%",
-    position: "relative",
+    paddingTop: theme.spacing.lg,
+    alignItems: 'center',
   },
   chatArea: {
     flex: 1,
-    minHeight: 360,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.panel,
-    padding: spacing.md,
-    paddingBottom: spacing.lg + 72,
     width: "100%",
-    position: "relative",
-    zIndex: 1,
+    paddingHorizontal: theme.spacing.md,
+    paddingBottom: 100, // Space for input area
   },
   inputArea: {
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: theme.spacing.sm,
     alignItems: "center",
-    backgroundColor: colors.panelAlt,
-    padding: spacing.sm,
-    borderRadius: radius.md,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.sm,
+    borderRadius: theme.layout.radius.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: theme.colors.goldDim,
     position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: DRAWER_COLLAPSED_HEIGHT + spacing.xs - 24,
-    zIndex: 5,
+    left: theme.spacing.md,
+    right: theme.spacing.md,
+    bottom: Platform.OS === 'ios' ? 24 : 12, // Adjusted for safe area?
+    zIndex: 10,
     elevation: 5,
-    width: "100%",
-  },
-  list: {
-    flex: 1,
-    minHeight: 0,
-  },
-  listContent: {
-    flexGrow: 1,
-    paddingBottom: spacing.lg,
-    gap: spacing.sm,
-    justifyContent: "flex-start",
-  },
-  bubble: {
-    padding: spacing.md,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-  },
-  userBubble: {
-    alignSelf: "flex-end",
-    backgroundColor: colors.gold,
-    borderColor: colors.gold,
-  },
-  aiBubble: {
-    alignSelf: "flex-start",
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
-  },
-  bubbleText: {
-    fontSize: 14,
-  },
-  userText: {
-    color: colors.ink,
-  },
-  aiText: {
-    color: colors.parchment,
-  },
-  systemBubble: {
-    alignSelf: "center",
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-    marginVertical: spacing.sm,
-  },
-  systemText: {
-    color: colors.ink,
-    fontWeight: "bold",
-    textAlign: "center",
-    letterSpacing: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
   },
   input: {
     flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: theme.layout.radius.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    color: theme.colors.textPrimary,
+    fontFamily: theme.fonts.body,
+    fontSize: 16,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    color: colors.parchment,
-    backgroundColor: colors.panel,
+    borderColor: theme.colors.border,
+  },
+  list: {
+    flex: 1,
+  },
+  listContent: {
+    flexGrow: 1,
+    paddingBottom: 120, // More space for input
+    gap: theme.spacing.md,
+  },
+  bubble: {
+    padding: theme.spacing.md,
+    borderRadius: theme.layout.radius.md,
+    borderWidth: 1,
+    maxWidth: '85%',
+  },
+  userBubble: {
+    alignSelf: "flex-end",
+    backgroundColor: 'rgba(197, 160, 89, 0.1)',
+    borderColor: theme.colors.goldDim,
+    borderBottomRightRadius: 2,
+  },
+  systemBubble: {
+    alignSelf: "center",
+    backgroundColor: 'rgba(138, 28, 28, 0.2)', // Crimson tint
+    borderColor: theme.colors.crimson,
+    width: '90%',
+  },
+  aiBubble: {
+    alignSelf: "flex-start",
+    backgroundColor: 'rgba(18, 18, 20, 0.8)', // Dark panel
+    borderColor: theme.colors.border,
+    borderBottomLeftRadius: 2,
+  },
+  bubbleText: {
+    fontFamily: theme.fonts.body,
+    fontSize: 15,
+    lineHeight: 22,
+    color: theme.colors.textPrimary,
+  },
+  userText: {
+    color: theme.colors.gold,
+  },
+  systemText: {
+    color: theme.colors.crimsonBright,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    fontFamily: theme.fonts.header,
+  },
+  aiText: {
+    color: theme.colors.textPrimary,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 20,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 20,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    padding: theme.spacing.sm,
+    borderRadius: theme.layout.radius.pill,
+    marginHorizontal: '20%',
+  },
+  loadingLabel: {
+    color: theme.colors.gold,
+    marginTop: theme.spacing.xs,
+    fontFamily: theme.fonts.body,
+    fontSize: 12,
   },
   drawer: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.panel,
-    overflow: "hidden",
-    height: DRAWER_COLLAPSED_HEIGHT + DRAWER_CONTENT_HEIGHT,
-    zIndex: 2,
-    minHeight: DRAWER_COLLAPSED_HEIGHT,
+    height: DRAWER_EXPANDED_HEIGHT,
+    zIndex: 20,
+    elevation: 20,
   },
   drawerHandle: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.sm,
     height: DRAWER_COLLAPSED_HEIGHT,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderTopLeftRadius: theme.layout.radius.lg,
+    borderTopRightRadius: theme.layout.radius.lg,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: theme.colors.gold,
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexDirection: 'row',
+    paddingHorizontal: theme.spacing.lg,
+    shadowColor: theme.colors.gold,
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   drawerHandleLabel: {
-    color: colors.parchment,
-    fontWeight: "700",
-    letterSpacing: 1,
+    color: theme.colors.gold,
+    fontFamily: theme.fonts.header,
     textTransform: "uppercase",
+    letterSpacing: 2,
+    fontSize: 14,
+    fontWeight: "bold",
   },
   drawerHandleBadge: {
-    color: colors.mutedGold,
-    fontSize: 12,
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    fontFamily: theme.fonts.body,
   },
   drawerContentWrapper: {
-    flex: 1,
+    height: DRAWER_CONTENT_HEIGHT,
+    backgroundColor: theme.colors.surface,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: theme.colors.border,
+    padding: theme.spacing.md,
   },
   drawerScroll: {
-    maxHeight: DRAWER_CONTENT_HEIGHT,
-    width: "100%",
+    flex: 1,
   },
   drawerScrollContent: {
-    padding: spacing.sm,
-    gap: spacing.sm,
-  },
-  selectorRow: {
-    gap: spacing.sm,
-  },
-  pill: {
-    color: colors.mutedGold,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    fontSize: 12,
-    letterSpacing: 1,
-    textTransform: "uppercase",
-  },
-  pillActive: {
-    backgroundColor: colors.gold,
-    color: colors.ink,
-    borderColor: colors.gold,
+    paddingBottom: theme.spacing.lg,
+    gap: theme.spacing.sm,
   },
   drawerButtonRow: {
     flexDirection: "row",
-    gap: spacing.sm,
-    flexWrap: "wrap",
-  },
-  weaponRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    alignItems: "center",
-  },
-  weaponButton: {
-    flex: 1,
-    minWidth: 120,
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+    flexWrap: 'wrap',
   },
   halfButton: {
     flex: 1,
   },
-  checkSection: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.panel,
-    padding: spacing.md,
-    gap: spacing.sm,
-  },
-  checkSectionTitle: {
-    color: colors.parchment,
-    fontWeight: "700",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    fontSize: 12,
-  },
-  drawerInput: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    color: colors.parchment,
-    backgroundColor: colors.panelAlt,
-  },
   inventoryRow: {
     flexDirection: "row",
-    gap: spacing.sm,
-    alignItems: "center",
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
   },
-  inventoryInput: {
+  drawerInput: {
     flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    color: theme.colors.textPrimary,
+    fontFamily: theme.fonts.body,
   },
   inventoryButton: {
-    minWidth: 120,
+    width: 100,
+  },
+  weaponRow: {
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  weaponButton: {
+    minWidth: 100,
+  },
+  checkSection: {
+    marginTop: theme.spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    paddingTop: theme.spacing.md,
+  },
+  checkSectionTitle: {
+    color: theme.colors.textSecondary,
+    fontFamily: theme.fonts.header,
+    marginBottom: theme.spacing.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  pill: {
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: theme.layout.radius.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    color: theme.colors.textMuted,
+    fontFamily: theme.fonts.body,
+    fontSize: 12,
+    overflow: 'hidden',
   },
   checkModePill: {
-    borderColor: colors.gold,
+    // default state
   },
-  checkResult: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    backgroundColor: colors.panelAlt,
-  },
-  checkResultText: {
-    color: colors.parchment,
-    fontSize: 12,
+  pillActive: {
+    backgroundColor: theme.colors.goldDim,
+    borderColor: theme.colors.gold,
+    color: theme.colors.textPrimary,
+    fontWeight: 'bold',
   },
   muted: {
-    color: colors.mutedGold,
+    color: theme.colors.textMuted,
+    fontFamily: theme.fonts.body,
+    fontStyle: 'italic',
     fontSize: 12,
   },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.4)",
+  checkResult: {
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: theme.layout.radius.sm,
+    padding: theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    marginTop: theme.spacing.sm,
+  },
+  checkResultText: {
     justifyContent: "center",
     alignItems: "center",
     borderRadius: radius.md,

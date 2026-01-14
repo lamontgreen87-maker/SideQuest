@@ -10,6 +10,12 @@
     "assetBundlePatterns": [
       "**/*"
     ],
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a1a"
+    },
     "android": {
       "package": "com.anonymous.dungeoncrawler",
       "label": "Side Quest",

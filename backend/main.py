@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from pydantic import BaseModel
+import bcrypt
 
 from rules import (
     Character,
@@ -48,7 +49,20 @@ from rules import (
     serialize_monster,
     serialize_rules_session,
 )
+
 app = FastAPI()
+
+def verify_password(plain_password, hashed_password):
+    if not isinstance(plain_password, bytes):
+        plain_password = plain_password.encode('utf-8')
+    if not isinstance(hashed_password, bytes):
+        hashed_password = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(plain_password, hashed_password)
+
+def get_password_hash(password):
+    if not isinstance(password, bytes):
+        password = password.encode('utf-8')
+    return bcrypt.hashpw(password, bcrypt.gensalt()).decode('utf-8')
 
 app.add_middleware(
     CORSMiddleware,
@@ -106,15 +120,17 @@ CLERK_LOG_PATH = os.getenv(
 API_KEY = os.getenv("API_KEY")
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
 ADMIN_KEY = os.getenv("ADMIN_KEY")
-POLYGON_RPC_URL = os.getenv("POLYGON_RPC_URL", "https://eth.llamarpc.com")
+# Using Flashbots RPC (reliable, no auth needed)
+POLYGON_RPC_URL = os.getenv("POLYGON_RPC_URL", "https://rpc.flashbots.net")
 USDT_CONTRACT_ADDRESS = os.getenv("USDT_CONTRACT_ADDRESS", "0xdAC17F958D2ee523a2206206994597C13D831ec7")
-PAYMENT_WALLET_ADDRESS = os.getenv("PAYMENT_WALLET_ADDRESS", "")
+PAYMENT_WALLET_ADDRESS = os.getenv("PAYMENT_WALLET_ADDRESS", "0x062F50dD65caEC59AF85605a66f8287b22565F06")
 PAYMENT_CONFIRMATIONS = int(os.getenv("PAYMENT_CONFIRMATIONS", "1"))
 PAYMENT_POLL_INTERVAL = float(os.getenv("PAYMENT_POLL_INTERVAL", "15"))
-PAYMENT_MAX_BLOCK_RANGE = int(os.getenv("PAYMENT_MAX_BLOCK_RANGE", "100"))
+# Reduced block range to prevent timeouts
+PAYMENT_MAX_BLOCK_RANGE = int(os.getenv("PAYMENT_MAX_BLOCK_RANGE", "50"))
 PRICE_TABLE_JSON = os.getenv("PRICE_TABLE_JSON", "")
 PRICE_PER_CREDIT_USDT = os.getenv("PRICE_PER_CREDIT_USDT", "0.02")
-STARTING_CREDITS = 1000
+STARTING_CREDITS = int(os.getenv("STARTING_CREDITS", "100"))
 GOOGLE_CLIENT_ID = os.getenv(
     "GOOGLE_CLIENT_ID",
     "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com",
@@ -195,6 +211,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "Do not reveal your internal reasoning or analysis. "
     "Do not output thought tags or step-by-step logic. "
     "Respond with final narration only, no preface."
+    "CRITICAL: If the campaign brief mentions a 'Major Catastrophe' (e.g. Lich, Dragon, Plague), you MUST reference it."
+    "Hints of this catastrophe should be visible in the world (e.g. strange weather, refugees, ruins) even if the immediate threat is not present."
 )
 DEFAULT_CAMPAIGN_BRIEF = (
     "A storm-battered frontier teeters as a buried horror stirs beneath ruined keeps. "
@@ -261,7 +279,15 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         if "locations" in world_state["staged_lore"]:
             for loc in world_state["staged_lore"]["locations"]:
                 staged_lore_line += f"- Location: {loc['name']}, {loc['description']}\n"
-                
+    
+    # Map Context
+    map_line = ""
+    current_loc = state.get("location") # Assuming 'location' is the key
+    if current_loc and "map" in world_state and current_loc in world_state["map"]:
+        neighbors = world_state["map"][current_loc]
+        if neighbors:
+            map_line = f"Travel Options (Paths lead to): {', '.join(neighbors)}.\n"
+            
     # If it's the very start (no summary yet), suppress campaign brief from the prompt so we don't dump it.
     final_campaign_summary = campaign_summary
     if not world_summary:
@@ -270,17 +296,50 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
     return (
         DEFAULT_SYSTEM_PROMPT
         + " Use the game state JSON below. If the state changes, reflect it. "
-        + "Always end the player-visible narration with a direct question. "
+        + "CRITICAL: Every narration MUST end with a direct question to the player. "
+        + "Use ACTION-ORIENTED questions: 'What do you do?', 'How do you respond?', 'Do you enter?', 'Which path do you take?' "
+        + "AVOID preference questions like 'What do you want?' unless it's a specific choice (e.g., 'Which weapon do you want?'). "
+        + "NEVER end with just a description. The player must always know it's their turn. "
         + "End with a separate line: 'NARRATION_HINT: narrate' or "
         + "'NARRATION_HINT: skip' to signal whether the next action deserves narration.\n"
         + "Maintain continuity with the recent conversation. "
         + "Avoid modern or out-of-genre references (chainsaws, phones, cars, guns, electricity, internet) "
         + "unless explicitly present in the world state.\n"
+        + "\n=== DYNAMIC ATTRACTION SYSTEM (MATURE CONTENT) ===\n"
+        + "NPCs have 'attraction_score' (0-100) and 'attraction_compatible' (true/false based on sexuality).\n"
+        + "During interactions, you MAY increase an NPC's attraction_score if:\n"
+        + "- Player flirts or uses charm: Requires PERSUASION check (DC 12-18 based on NPC disposition)\n"
+        + "  - SUCCESS: +15 attraction, FAILURE: +0 (awkward), CRITICAL FAIL: -5 (creepy)\n"
+        + "- Player impresses with skill/action: Requires relevant skill check\n"
+        + "  - SUCCESS: +10 attraction, CRITICAL SUCCESS: +15\n"
+        + "- Player shows courage/heroism: Automatic +20 attraction (no check needed)\n"
+        + "- Player aligns with NPC's values: Automatic +5 attraction (no check needed)\n"
+        + "- Random spark of interest: Automatic +10 attraction (use sparingly, 10% chance per interaction)\n"
+        + "\nIMPORTANT - Skill Check Requirements:\n"
+        + "- Flirting/Seduction: ALWAYS requires Persuasion (Charisma) check\n"
+        + "- DC = 10 + (12 - NPC disposition_score) (Hostile NPCs are harder to charm)\n"
+        + "- Player must explicitly attempt flirtation for the check to trigger\n"
+        + "- Failed flirtation does NOT increase attraction\n"
+        + "- Critical failures can DECREASE attraction (player comes off as creepy/desperate)\n"
+        + "\nAttraction Thresholds (show in narration):\n"
+        + "- 0-20: No attraction, normal interaction\n"
+        + "- 21-40: Mild interest - 'glances at you', 'lingers nearby'\n"
+        + "- 41-60: Moderate - 'leans close', 'touches your arm', 'voice softens'\n"
+        + "- 61-80: Strong - 'eyes hungry', 'breath quickens', 'bites lip'\n"
+        + "- 81-100: Overwhelming - 'whispers invitation', 'pulls you aside', explicit proposition\n"
+        + "\nOther Rules:\n"
+        + "- Only compatible NPCs (attraction_compatible=true) can develop attraction\n"
+        + "- Attraction can develop with ANYONE compatible, even enemies (forbidden romance)\n"
+        + "- Use vivid, adult language for attraction (this is mature content)\n"
+        + "- Attraction builds gradually over multiple interactions\n"
+        + "- When attraction increases, describe the NPC's reaction explicitly\n"
+        + "=== END ATTRACTION SYSTEM ===\n\n"
         + combat_line
         + loot_line
         + locations_line
+        + map_line
         + staged_lore_line
-        + (f"SOCIAL REACTION: {state.get('social_result')}\n" if state.get("social_result") else "")
+        + (f"ACTION RESULT: {state.get('action_result')}\n" if state.get("action_result") else "")
         + ("Campaign brief:\n" + final_campaign_summary + "\n" if final_campaign_summary else "")
         + ("World summary:\n" + world_summary + "\n" if world_summary else "")
         + "Game state JSON:\n"
@@ -476,6 +535,7 @@ class CharacterCreateRequest(BaseModel):
     items: Optional[List[str]] = None
     conditions: Optional[List[str]] = None
     race: Optional[str] = None
+    gender: Optional[str] = None
     background: Optional[str] = None
     alignment: Optional[str] = None
     traits: Optional[List[str]] = None
@@ -504,10 +564,12 @@ class EnemyCreateResponse(BaseModel):
 
 class IntroRequest(BaseModel):
     name: Optional[str] = None
+    gender: Optional[str] = None
     klass: Optional[str] = None
 
 class IntroSessionRequest(BaseModel):
     name: Optional[str] = None
+    gender: Optional[str] = None
     klass: Optional[str] = None
     character: Optional[Dict[str, Any]] = None
 
@@ -536,10 +598,16 @@ class WalletVerifyRequest(BaseModel):
 class GoogleAuthRequest(BaseModel):
     id_token: str
 
+class EmailAuthRequest(BaseModel):
+    email: str
+    password: str
+    guest_token: Optional[str] = None
+
 class AuthResponse(BaseModel):
     token: str
     credits: int
     wallet: Optional[str] = None
+    id: Optional[str] = None
 
 class RedeemRequest(BaseModel):
     code: str
@@ -1032,8 +1100,9 @@ def generate_unique_amount(base_amount: Decimal) -> Decimal:
 
 async def polygon_rpc(method: str, params: List[Any]) -> Any:
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    headers = {"User-Agent": "DungeonCrawler/1.0", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(POLYGON_RPC_URL, json=payload)
+        response = await client.post(POLYGON_RPC_URL, json=payload, headers=headers)
         response.raise_for_status()
         data = response.json()
     if "error" in data:
@@ -1111,11 +1180,21 @@ def match_order_for_amount(amount: str, block_number: int) -> Optional[Dict[str,
 
 async def process_payment_logs() -> None:
     if not PAYMENT_WALLET_ADDRESS:
+        logger.warning("Payment watcher skipped: PAYMENT_WALLET_ADDRESS not set")
         return
-    latest_block = await get_latest_block()
+    try:
+        latest_block = await get_latest_block()
+    except Exception as e:
+        logger.error(f"Failed to get latest block: {e}")
+        return
+
     last_block = int(payment_state.get("last_block", 0))
     if last_block <= 0:
-        last_block = max(0, latest_block - 200)
+        # If no last block, start from 100 blocks ago to catch recent txs
+        last_block = max(0, latest_block - 100)
+    
+    logger.info(f"Payment Watcher: Scanning from {last_block} to {latest_block} (Wallet: {PAYMENT_WALLET_ADDRESS})")
+
     if last_block > latest_block:
         payment_state["last_block"] = latest_block
         return
@@ -1129,18 +1208,31 @@ async def process_payment_logs() -> None:
             if "Block range is too large" in str(exc) and max_range > 1:
                 max_range = max(1, max_range // 2)
                 continue
+            logger.error(f"Error fetching logs: {exc}")
             raise
+        
+        if logs:
+            logger.info(f"Found {len(logs)} logs in range {scan_start}-{scan_end}")
+            
         for log in logs:
             topics = log.get("topics", [])
             if len(topics) < 3:
                 continue
             to_addr = decode_topic_address(topics[2])
+            
+            # Debug log for address matching
+            # logger.info(f"Checking log to: {to_addr} vs {PAYMENT_WALLET_ADDRESS}")
+            
             if normalize_address(to_addr) != normalize_address(PAYMENT_WALLET_ADDRESS):
                 continue
+                
             amount_dec = decode_usdt_amount(log.get("data", "0x0"))
             amount_str = format_usdt(amount_dec)
             block_number = int(log.get("blockNumber", "0x0"), 16)
             tx_hash = log.get("transactionHash")
+            
+            logger.info(f"Processing transfer: {amount_str} USDT in block {block_number} (Tx: {tx_hash})")
+            
             if not tx_hash:
                 continue
             for order in payment_orders.values():
@@ -1600,6 +1692,8 @@ def apply_character_to_state(
         updated["summary"] = f"Character created: {label} the {klass_value}."
         facts = list(updated.get("facts") or [])
         facts.append(f"{label} is a {klass_value}.")
+        if character_payload.get("gender"):
+            facts.append(f"{label} is {character_payload['gender']}.")
         updated["facts"] = facts[-20:]
     updated["updated_at"] = stamp_now()
     return updated
@@ -1630,6 +1724,8 @@ def apply_character_to_world(
     klass_value = character_payload.get("class") or klass or "Hero"
     facts = list(updated.get("facts") or [])
     facts.append(f"{label} is a {klass_value}.")
+    if character_payload.get("gender"):
+        facts.append(f"{label} is {character_payload['gender']}.")
     updated["facts"] = facts[-50:]
     updated["summary"] = f"Character in world: {label} the {klass_value}."
     updated["updated_at"] = stamp_now()
@@ -1662,21 +1758,24 @@ def get_rules_session_or_404(session_id: str) -> RulesSession:
     return session
 
 
-def build_rules_prompt(session: RulesSession, last_log: str) -> List[Dict[str, str]]:
+def build_rules_prompt(session: RulesSession, last_log: str, is_finisher: bool = False) -> List[Dict[str, str]]:
+    style = "Visceral, kinetic, and brutal. Focus on the physical impact, the sound of steel/bone, and the momentum."
+    if is_finisher:
+        style += " DESTROY HIM. This is a killing blow. Make it dramatic, gory, and final."
     return [
         {
             "role": "system",
             "content": (
-                "You are a strict fantasy narrator. "
-                "Do not change results, add new mechanics, or add extra effects. "
-                "Narrate only the outcome in 2-4 sentences."
+                f"You are a fantasy action narrator. Style: {style} "
+                "Describe the action corresponding to the Event. Do not mention HP numbers, dice rolls, or game mechanics."
             ),
         },
         {
             "role": "user",
             "content": (
-                f"PC: {session.pc.name} HP {session.pc.hp}/{session.pc.max_hp}, AC {session.pc.armor_class}. "
-                f"Enemy: {session.enemy.name} HP {session.enemy.hp}/{session.enemy.max_hp}, AC {session.enemy.armor_class}. "
+                f"Attacker: {session.pc.name if 'pc' in last_log else session.enemy.name}\n"
+                f"Weapon/Attack: {last_log}\n"
+                f"Context: {session.pc.name} vs {session.enemy.name}.\n"
                 f"Event: {last_log}"
             ),
         },
@@ -1685,8 +1784,21 @@ def build_rules_prompt(session: RulesSession, last_log: str) -> List[Dict[str, s
 
 async def narrate_rules_event(session: RulesSession) -> str:
     last_log = session.log[-1] if session.log else "The fight continues."
-    response = await ollama_chat(build_rules_prompt(session, last_log), fast=False)
-    return response.strip()
+    is_finisher = session.enemy.hp <= 0 or session.pc.hp <= 0
+    
+    messages = build_rules_prompt(session, last_log, is_finisher)
+    
+    # Use Heavy Model for Finishers to ensure high quality gore/drama
+    model = HEAVY_MODEL_NAME if is_finisher else MODEL_NAME
+    fallback = HEAVY_FALLBACK_MODEL if is_finisher else FALLBACK_MODEL_NAME
+    
+    response = await ollama_chat_with_model(
+        messages, 
+        fast=not is_finisher, 
+        model_name=model, 
+        fallback_model=fallback
+    )
+    return strip_thoughts(response.strip())
 
 
 def build_retry_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -1704,6 +1816,27 @@ def build_continue_messages(messages: List[Dict[str, str]]) -> List[Dict[str, st
             "content": "Continue the response with one complete paragraph.",
         }
     ]
+
+def has_action_prompt(text: str) -> bool:
+    """Check if the text ends with a question or action prompt."""
+    if not text:
+        return False
+    text = text.strip().lower()
+    # Check for question marks
+    if text.endswith('?'):
+        return True
+    # Check for common action prompts
+    action_phrases = [
+        'what do you do',
+        'how do you respond',
+        'what happens next',
+        'do you',
+        'will you',
+        'which path',
+        'where do you go',
+        'what is your choice'
+    ]
+    return any(phrase in text[-100:] for phrase in action_phrases)
 
 def should_retry_with_fallback(response: httpx.Response, model_name: str) -> bool:
     if not FALLBACK_MODEL_NAME or model_name == FALLBACK_MODEL_NAME:
@@ -1961,7 +2094,7 @@ def build_clerk_messages(
                 "state (object), story_input (string), player_reply (string), world_updates (array), "
                 "world_summary (string), inventory_add (array), inventory_remove (array), "
                 "action_type (string), new_locations (array of strings), new_npcs (array of strings), "
-                "used_staged_lore (array of strings). "
+                "used_staged_lore (array of strings), new_rumor (string or null), reputation_change (integer, -1 to 1). "
                 "story_input should be the player's message cleaned to only story actions. "
                 "If should_narrate is false, player_reply should be a brief non-narrative ack. "
                 "action_type should be 'equip' only for equipping items; otherwise use 'narrate'. "
@@ -1971,6 +2104,16 @@ def build_clerk_messages(
                 "inventory_remove should list items that are consumed or removed. "
                 "new_locations should list any new and significant locations mentioned in the story. "
                 "used_staged_lore should list the names of any NPCs or locations from the 'staged_lore' that were used in the story. "
+                "new_rumor: If the player does something legendary (kill boss, save town) or notorious (murder, theft), write a 1-sentence rumor about it. "
+                "reputation_change: +1 for Heroic deeds, -1 for Villainous deeds, 0 otherwise. "
+                "standing_change: If player helps/hurts a faction, output {'Faction Name': Delta} (e.g. {'Iron Legion': 5}). "
+                "state.gold (integer): Update gold based on transactions/loot. "
+                "ECONOMY RULES: "
+                "1. If player buys items, deduct gold. Standard prices: Rations (5g), Weapon (50g), Potion (25g). "
+                "2. Dynamic Prices: If Standing < 0, prices 2x. If Standing > 50, prices 0.5x. "
+                "3. Black Market: If Reputation < -5 (Villain) OR Standing(Criminal Faction) > 20, player can buy Poisons/Dark Magic.Map this trigger to narrating a seedy encounter. "
+                "standing_change: If player helps/hurts a faction, output {'Faction Name': Delta} (e.g. {'Iron Legion': 5}). "
+                "read_book: If player reads a book/scroll, output the Title (e.g. 'The Tome of Rot'). "
                 "If a physical combat encounter begins, include 'encounter': {'name': 'Name of Enemy', 'cr': 'optional CR'} in the JSON. "
                 "Make leveling part of your GM goals: aim for progression from level 1 to level 5 "
                 "in about 2 hours of play (roughly ~5 encounters). When a milestone is reached, "
@@ -2069,6 +2212,48 @@ async def clerk_update_state(
                             del world_state["staged_lore"]["locations"][i]
                             break
 
+    # Faction Generation (Lazy Load)
+    if "factions" not in world_state:
+        log_clerk_event("Blocking for Faction Gen")
+        world_state["factions"] = await _generate_factions(world_state)
+        log_clerk_event(f"Factions generated: {len(world_state['factions'])}")
+
+    # Pantheon Generation (Lazy Load)
+    if "pantheon" not in world_state:
+        log_clerk_event("Blocking for Pantheon Gen")
+        world_state["pantheon"] = await _generate_pantheon(world_state)
+        log_clerk_event(f"Pantheon generated: {len(world_state['pantheon'])}")
+
+    # Racial Tensions Generation (Lazy Load)
+    if "racial_tensions" not in world_state:
+        log_clerk_event("Blocking for Racial Tensions Gen")
+        world_state["racial_tensions"] = await _generate_racial_tensions(world_state)
+        log_clerk_event(f"Racial Tensions generated")
+
+    # Guilds Generation (Lazy Load)
+    if "guilds" not in world_state:
+        log_clerk_event("Blocking for Guilds Gen")
+        world_state["guilds"] = await _generate_guilds(world_state)
+        log_clerk_event(f"Guilds generated: {len(world_state['guilds'])}")
+
+    # Magic Philosophies Generation (Lazy Load)
+    if "magic_philosophies" not in world_state:
+        log_clerk_event("Blocking for Magic Philosophies Gen")
+        world_state["magic_philosophies"] = await _generate_magic_philosophies(world_state)
+        log_clerk_event(f"Magic Philosophies generated: {len(world_state['magic_philosophies'])}")
+
+    # Homelands Generation (Lazy Load)
+    if "homelands" not in world_state:
+        log_clerk_event("Blocking for Homelands Gen")
+        world_state["homelands"] = await _generate_homelands(world_state)
+        log_clerk_event(f"Homelands generated: {len(world_state['homelands'])}")
+
+    # Family Feuds Generation (Lazy Load)
+    if "family_feuds" not in world_state:
+        log_clerk_event("Blocking for Family Feuds Gen")
+        world_state["family_feuds"] = await _generate_family_feuds(world_state)
+        log_clerk_event(f"Family Feuds generated: {len(world_state['family_feuds'])}")
+
     new_locations = payload.get("new_locations") if isinstance(payload.get("new_locations"), list) else []
     if new_locations:
         if "locations" not in world_state:
@@ -2085,11 +2270,121 @@ async def clerk_update_state(
                     # Update local state too so current turn sees it
                     next_state["updated_at"] = stamp_now()
                     log_clerk_event(f"World gen complete: {location_name}")
+                    
+                    # MAP SYSTEM: Link to previous location
+                    prev_loc = state.get("context", {}).get("location")
+                    if prev_loc and prev_loc in world_state.get("locations", {}):
+                        if "map" not in world_state:
+                            world_state["map"] = {}
+                        
+                        # Forward Link
+                        if prev_loc not in world_state["map"]: world_state["map"][prev_loc] = []
+                        if location_name not in world_state["map"][prev_loc]:
+                             world_state["map"][prev_loc].append(location_name)
+                             
+                        # Backward Link
+                        if location_name not in world_state["map"]: world_state["map"][location_name] = []
+                        if prev_loc not in world_state["map"][location_name]:
+                            world_state["map"][location_name].append(prev_loc)
+                            
+                        log_clerk_event(f"Map updated: Linked {prev_loc} <-> {location_name}")
+                    
+    # Rumor System
+    new_rumor = payload.get("new_rumor")
+    if isinstance(new_rumor, str) and new_rumor.strip():
+        if "rumors" not in world_state:
+            world_state["rumors"] = []
+        # Keep max 10 active rumors
+        if len(world_state["rumors"]) >= 10:
+             world_state["rumors"].pop(0)
+        world_state["rumors"].append(new_rumor.strip())
+        log_clerk_event(f"New Rumor added: {new_rumor}")
 
-    # SOCIAL COMBAT SYSTEM
-    # Naive check: does input verify simple interaction with known NPC?
-    # We can refine this by letting Clerk LLM identify the target, but for "hybrid" speed/robustness:
-    social_result = None
+    # Reputation System
+    rep_change = payload.get("reputation_change")
+    if isinstance(rep_change, int) and rep_change != 0:
+        current_rep = world_state.get("reputation", 0)
+        world_state["reputation"] = current_rep + rep_change
+        log_clerk_event(f"Reputation changed: {rep_change} (Total: {world_state['reputation']})")
+
+    # Book System
+    book_title = payload.get("read_book")
+    if book_title:
+        log_clerk_event(f"Player reading: {book_title}")
+        book_content = await _read_book(book_title, world_state)
+        # Return book content directly without Narrator (prevents timeout)
+        next_state["action_result"] = book_content
+        should_narrate = False
+        player_reply = book_content
+
+
+    # Faction Standing System
+    standing_change = payload.get("standing_change")
+    if isinstance(standing_change, dict):
+        if "standing" not in world_state:
+             world_state["standing"] = {}
+        for faction_name, change in standing_change.items():
+            current = world_state["standing"].get(faction_name, 0)
+            world_state["standing"][faction_name] = max(-100, min(100, current + int(change)))
+            log_clerk_event(f"Standing change for {faction_name}: {change} (Total: {world_state['standing'][faction_name]})")
+
+    # MULTI-AGENT LISTENING SYSTEM
+    if user_input.strip().lower().startswith("/listen"):
+        listening_log = []
+        conversation_context = f"Time: {stamp_now()}. Location: Unknown."
+        # Find NPCs from world state
+        candidates = []
+        if "locations" in world_state:
+            for loc_data in world_state["locations"].values():
+                if isinstance(loc_data, dict):
+                    candidates.extend(loc_data.get("npcs", []))
+        
+        # Fallback if no NPCs found
+        if len(candidates) < 2:
+            candidates.append({"name": "Bystander", "role": "Commoner", "mannerism": "Nervous"})
+        if len(candidates) < 2:
+            candidates.append({"name": "Stranger", "role": "Traveler", "mannerism": "Quiet"})
+            
+        npc_a = random.choice(candidates)
+        candidates.remove(npc_a)
+        npc_b = random.choice(candidates)
+        
+        topic = "The recent rumors"
+        campaign = world_state.get("campaign")
+        if isinstance(campaign, dict):
+            summary = str(campaign.get("summary") or "")
+            if summary:
+                topic = f"The trouble in the region: {summary[:50]}..."
+        
+        # Inject Specific Rumors
+        rumors = world_state.get("rumors", [])
+        if rumors:
+            # Pick a random rumor to discuss
+            active_rumor = random.choice(rumors)
+            topic = f"The latest rumor: '{active_rumor}'"
+
+        listening_log.append(f"You overhear {npc_a['name']} and {npc_b['name']} talking.")
+        
+        # 4-Turn Loop (Ping Pong)
+        history = []
+        for _ in range(2): # 2 rounds of A->B, B->A = 4 turns
+            # Turn 1: A speaks
+            line_a = await generate_npc_dialogue_turn(npc_a, npc_b, topic, history, conversation_context)
+            history.append(f"{npc_a['name']}: {line_a}")
+            listening_log.append(f"**{npc_a['name']}**: \"{line_a}\"")
+            
+            # Turn 2: B responds
+            line_b = await generate_npc_dialogue_turn(npc_b, npc_a, topic, history, conversation_context)
+            history.append(f"{npc_b['name']}: {line_b}")
+            listening_log.append(f"**{npc_b['name']}**: \"{line_b}\"")
+            
+        # Append the dialogue to the prompt so the Narrator sees it
+        dialogue_block = "\n".join(listening_log)
+        user_input += f"\n\n[System: The player listens to a conversation]\n{dialogue_block}"
+        next_state["last_dialogue"] = dialogue_block
+
+    # UNIVERSAL SKILL SYSTEM
+    action_result = None
     known_npcs = {}
     if "locations" in world_state:
         for loc_data in world_state["locations"].values():
@@ -2103,36 +2398,133 @@ async def clerk_update_state(
              target_npc = npc_data
              break
     
-    if target_npc:
-        # Perform Reaction Roll
-        # 2d6 + CHA Mod
-        cha_score = state.get("character", {}).get("abilities", {}).get("cha", 10)
-        roll = roll_dice(2, 6) + ability_mod(cha_score)
+    # 1. Define Skill Keywords
+    skill_map = {
+        # Social (Requires Target NPC usually, but not always)
+        "intimidate": "cha", "threaten": "cha", "scare": "cha", "force": "cha",
+        "persuade": "cha", "charm": "cha", "convince": "cha", "ask": "cha", "beg": "cha",
+        "deceive": "cha", "lie": "cha", "trick": "cha", "bluff": "cha",
+        "insight": "wis", "sense": "wis", "read": "wis",
         
-        # Compare to NPC Base Disposition
-        base = target_npc.get("disposition_score", 7)
+        # Physical / Exploration
+        "sneak": "dex", "hide": "dex", "prowl": "dex", "unseen": "dex", # Stealth
+        "climb": "str", "jump": "str", "swim": "str", "bash": "str", "break": "str", "lift": "str", # Athletics
+        "vault": "dex", "flip": "dex", "balance": "dex", "tumble": "dex", # Acrobatics
+        "search": "int", "examine": "int", "loot": "int", "check": "int", "investigate": "int", # Investigation
+        "listen": "wis", "look": "wis", "spot": "wis", "watch": "wis", "perceive": "wis", # Perception
         
-        # Simple Difficulty Class logic: 
-        # Roll result < Base-2 => Degrading/Hostile
-        # Roll result > Base+2 => Improving/Friendly
-        # Else => Status Quo
+        # Knowledge
+        "recall": "int", "remember": "int", "identify": "int", "know": "int", "lore": "int",
+    }
+    
+    # 2. Detect Skill
+    chosen_skill = None
+    ability = "dex" # Default fallback
+    lower_input = user_input.lower()
+    
+    for keyword, mapped_ability in skill_map.items():
+        if keyword in lower_input:
+            ability = mapped_ability
+            if keyword in ["intimidate", "threaten", "scare", "force"]: chosen_skill = "intimidation"
+            elif keyword in ["deceive", "lie", "trick", "bluff"]: chosen_skill = "deception"
+            elif keyword in ["insight", "sense", "read"]: chosen_skill = "insight"
+            elif keyword in ["persuade", "charm", "convince", "ask", "beg"]: chosen_skill = "persuasion"
+            elif keyword in ["sneak", "hide", "prowl", "unseen"]: chosen_skill = "stealth"
+            elif keyword in ["climb", "jump", "swim", "bash", "break", "lift"]: chosen_skill = "athletics"
+            elif keyword in ["vault", "flip", "balance", "tumble"]: chosen_skill = "acrobatics"
+            elif keyword in ["search", "examine", "loot", "check", "investigate"]: chosen_skill = "investigation"
+            elif keyword in ["listen", "look", "spot", "watch", "perceive"]: chosen_skill = "perception"
+            elif keyword in ["recall", "remember", "identify", "know", "lore"]: chosen_skill = "history"
+            break
+            
+    if chosen_skill:
+        # 3. Calculate Roll
+        char_data = state.get("character", {})
+        stats = char_data.get("stats", {})
+        prof_bonus = char_data.get("prof_bonus", 2)
+        proficiencies = char_data.get("skill_proficiencies", [])
         
-        # Actually user wants Result to DETERMINE attitude:
-        # 2-5: Hostile, 6-8: Neutral, 9+: Friendly.
-        # Let's adjust by NPC base disposition (offset from 7).
-        offset = base - 7
-        final_score = roll + offset
+        abil_score = stats.get(ability, 10)
+        mod = (abil_score - 10) // 2
         
-        attitude = "Neutral"
-        if final_score <= 5:
-            attitude = "Hostile (Rude, dismissive, or aggressive)"
-        elif final_score >= 9:
-            attitude = "Friendly (Helpful, open, or warm)"
+        is_proficient = False
+        for p in proficiencies:
+            if chosen_skill in p.lower() or p.lower() in chosen_skill:
+                is_proficient = True
+                break
         
-        social_result = f"Interaction with {target_npc['name']}. Reaction Roll: {final_score} ({roll} + {offset} offset). Result: {attitude}."
-        next_state["social_result"] = social_result
+        bonus = mod + (prof_bonus if is_proficient else 0)
+        roll_val = random.randint(1, 20)
+        total = roll_val + bonus
+        
+        # 4. Determine DC
+        dc = 15 # Standard Medium DC
+        
+        # Dynamic DC for Opposed Rolls (if Target NPC exists)
+        if target_npc:
+            npc_stats = target_npc.get("stats", {})
+            opposed_stat = "wis" # Default to Insight/Perception defense
+            
+            if chosen_skill in ["intimidation", "deception", "persuasion"]:
+                opposed_stat = "wis"
+            elif chosen_skill == "stealth":
+                opposed_stat = "wis" # Passive Perception
+            elif chosen_skill == "insight":
+                opposed_stat = "cha" # Deception
+            elif chosen_skill in ["athletics", "acrobatics"]:
+                opposed_stat = "dex"
+                
+            # Calculate NPC Bonus
+            npc_score = 10
+            if isinstance(npc_stats, dict):
+                 npc_score = int(npc_stats.get(opposed_stat, 10))
+            
+            npc_mod = (npc_score - 10) // 2
+            # Base 10 + Mod + Proficiency (Assume 2)
+            dc = 10 + npc_mod + 2
+            
+            # Disposition Modifier for Social only
+            if chosen_skill in ["intimidation", "deception", "persuasion"]:
+                 disposition = target_npc.get("disposition_score", 7)
+                 
+                 # Apply dynamic attraction bonus to disposition
+                 attraction_score = target_npc.get("attraction_score", 0)
+                 if attraction_score >= 80:
+                     disposition = min(12, disposition + 3)  # Overwhelming attraction: +3
+                 elif attraction_score >= 60:
+                     disposition = min(12, disposition + 2)  # Strong attraction: +2
+                 elif attraction_score >= 40:
+                     disposition = min(12, disposition + 1)  # Moderate attraction: +1
+                 
+                 # Disp 2 (Hostile) -> +5 DC
+                 # Disp 7 (Neutral) -> +0 DC
+                 # Disp 12 (Friendly) -> -5 DC
+                 dc -= (disposition - 7)
+            
+            # Clamp DC
+            dc = max(5, min(30, dc))
+            
+        outcome = "FAILURE"
+        # Critical Success/Fail Logic
+        if roll_val == 20: outcome = "CRITICAL SUCCESS"
+        elif roll_val == 1: outcome = "CRITICAL FAILURE"
+        elif total >= dc: outcome = "SUCCESS"
+            
+        action_result = (
+            f"[Skill Check: {chosen_skill.title()} ({ability.upper()})]\n"
+            f"Roll: {total} (d20:{roll_val} + Mod:{bonus}) vs DC {dc}.\n"
+            f"Result: {outcome}."
+        )
+        if target_npc:
+             action_result += f" Target: {target_npc['name']}."
+             
+        # Save to state
+        next_state["action_result"] = action_result
     else:
-        # Clear previous social result if no NPC interaction detected
+        # Clear previous result
+        if "action_result" in next_state:
+             del next_state["action_result"]
+        # Clear legacy social_result
         if "social_result" in next_state:
              del next_state["social_result"]
 
@@ -2319,6 +2711,198 @@ async def ensure_campaign_brief(
     log_clerk_event("campaign_seed ready")
     return updated
 
+async def _generate_racial_tensions(world_state: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
+    """Generate racial tension matrix for the world."""
+    races = ["Human", "Elf", "Dwarf", "Halfling", "Orc", "Tiefling", "Dragonborn", "Gnome"]
+    
+    prompt = (
+        "Generate racial tensions for a dark fantasy world.\n"
+        f"Races: {', '.join(races)}\n"
+        "Instructions:\n"
+        "1. For each race, define their bias toward other races.\n"
+        "2. Bias Range: -50 (deep hatred) to +50 (strong kinship). 0 = neutral.\n"
+        "3. Examples: Elves dislike Orcs (-30), Dwarves distrust Elves (-20), Halflings like Humans (+15).\n"
+        "4. Make it asymmetric (Elf->Dwarf != Dwarf->Elf) for realism.\n"
+        "5. Output JSON: {'Elf': {'Dwarf': -20, 'Orc': -35}, 'Dwarf': {'Elf': -15, 'Orc': -25}, ...}\n"
+        "Only include non-zero biases. Omit neutral (0) relationships."
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a world-builder. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=45
+        )
+        json_match = re.search(r"\{[\s\S]*\}", raw)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception as e:
+        logger.warning(f"Racial tension generation failed: {e}")
+    
+    # Fallback: Basic tensions
+    return {
+        "Elf": {"Dwarf": -20, "Orc": -35},
+        "Dwarf": {"Elf": -15, "Orc": -30},
+        "Orc": {"Elf": -40, "Dwarf": -35, "Human": -20},
+        "Tiefling": {"Human": -15}
+    }
+
+async def _generate_guilds(world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate guilds for the world."""
+    
+    prompt = (
+        "Generate 3-5 guilds for a dark fantasy world.\n"
+        "Guild Types: Criminal (Thieves, Assassins), Trade (Merchants, Artisans), Arcane (Mages, Alchemists), Service (Healers, Bards)\n"
+        "Instructions:\n"
+        "1. For each guild, provide: name, type, leader name, ethos (1 sentence), rivals (list of other guild names).\n"
+        "2. Perks: Each guild grants ONE mechanical benefit (e.g., Thieves: '+2 Stealth', Merchants: '10% shop discount', Mages: '+1 spell slot').\n"
+        "3. Make rivalries asymmetric (Thieves hate Merchants, but Merchants might tolerate Thieves).\n"
+        "4. Output JSON: [{'name': 'Shadow Syndicate', 'type': 'criminal', 'leader': 'The Viper', 'ethos': 'Profit through stealth', 'rivals': ['Merchants Guild'], 'perk': '+2 Stealth'}, ...]\n"
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a world-builder. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=45
+        )
+        json_match = re.search(r"\[[\s\S]*\]", raw)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception as e:
+        logger.warning(f"Guild generation failed: {e}")
+    
+    # Fallback: Basic guilds
+    return [
+        {"name": "Thieves Guild", "type": "criminal", "leader": "The Shadow", "ethos": "Steal from the rich", "rivals": ["Merchants Guild"], "perk": "+2 Stealth"},
+        {"name": "Merchants Guild", "type": "trade", "leader": "Goldhand", "ethos": "Profit through trade", "rivals": ["Thieves Guild"], "perk": "10% shop discount"},
+        {"name": "Mages Conclave", "type": "arcane", "leader": "Archmage Vex", "ethos": "Knowledge is power", "rivals": [], "perk": "+1 spell slot"}
+    ]
+
+async def _generate_magic_philosophies(world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate magic philosophies for the world."""
+    
+    prompt = (
+        "Generate 3-5 magic philosophies for a dark fantasy world.\n"
+        "Philosophy Types:\n"
+        "- Arcane Schools: Evocation (fire/force), Necromancy (death/undead), Illusion (deception), Divination (foresight), Enchantment (mind control)\n"
+        "- Anti-Magic: Purists (ban all magic), Regulators (control magic use)\n"
+        "- Wild Magic: Chaos practitioners (reject formal training)\n"
+        "Instructions:\n"
+        "1. For each philosophy, provide: name, type, leader name, stance (1 sentence), rivals (list of other philosophy names).\n"
+        "2. Make rivalries asymmetric and intense (Necromancers vs Clerics, Wild Magic vs Academies).\n"
+        "3. Anti-Magic philosophies should rival ALL arcane schools.\n"
+        "4. Output JSON: [{'name': 'Crimson Evocation', 'type': 'arcane_school', 'leader': 'Pyromancer Kael', 'stance': 'Fire purifies all', 'rivals': ['Necromancy Circle']}, ...]\n"
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a world-builder. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=45
+        )
+        json_match = re.search(r"\[[\s\S]*\]", raw)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception as e:
+        logger.warning(f"Magic philosophy generation failed: {e}")
+    
+    # Fallback: Basic philosophies
+    return [
+        {"name": "Evocation Academy", "type": "arcane_school", "leader": "Archmage Pyra", "stance": "Fire and force are the true powers", "rivals": ["Necromancy Circle"]},
+        {"name": "Necromancy Circle", "type": "arcane_school", "leader": "Lich Lord Mortis", "stance": "Death is merely a transition", "rivals": ["Evocation Academy", "Church of Light"]},
+        {"name": "Church of Light", "type": "anti_magic", "leader": "High Priest Solara", "stance": "Magic corrupts the soul", "rivals": ["Necromancy Circle", "Evocation Academy", "Wild Coven"]},
+        {"name": "Wild Coven", "type": "wild_magic", "leader": "Chaos Witch Vex", "stance": "Magic should be free and untamed", "rivals": ["Evocation Academy"]}
+    ]
+
+async def _generate_homelands(world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate homelands/nations for the world."""
+    
+    prompt = (
+        "Generate 4-6 homelands/nations for a dark fantasy world.\n"
+        "Homeland Types: Kingdom, City-State, Tribal Territory, Empire, Republic\n"
+        "Instructions:\n"
+        "1. For each homeland, provide: name, type, ruler name, culture (1 sentence), allies (list of other homeland names), enemies (list of other homeland names).\n"
+        "2. Create realistic diplomatic relations: trade alliances, ancient rivalries, border wars.\n"
+        "3. Make conflicts asymmetric (Kingdom A hates Empire B, but Empire B is neutral to Kingdom A).\n"
+        "4. Include at least one war between two nations.\n"
+        "5. Output JSON: [{'name': 'Kingdom of Valoria', 'type': 'kingdom', 'ruler': 'King Aldric', 'culture': 'Honorable warriors', 'allies': ['Free City of Karak'], 'enemies': ['Dark Empire']}, ...]\n"
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a world-builder. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=45
+        )
+        json_match = re.search(r"\[[\s\S]*\]", raw)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception as e:
+        logger.warning(f"Homeland generation failed: {e}")
+    
+    # Fallback: Basic homelands
+    return [
+        {"name": "Kingdom of Valoria", "type": "kingdom", "ruler": "King Aldric", "culture": "Honorable knights and paladins", "allies": ["Free City of Karak"], "enemies": ["Dark Empire"]},
+        {"name": "Dark Empire", "type": "empire", "ruler": "Emperor Malachar", "culture": "Ruthless conquerors", "allies": [], "enemies": ["Kingdom of Valoria", "Elven Enclave"]},
+        {"name": "Free City of Karak", "type": "city_state", "ruler": "Council of Merchants", "culture": "Trade and commerce", "allies": ["Kingdom of Valoria"], "enemies": []},
+        {"name": "Elven Enclave", "type": "tribal", "ruler": "Elder Sylvara", "culture": "Forest guardians", "allies": [], "enemies": ["Dark Empire"]},
+        {"name": "Orcish Steppes", "type": "tribal", "ruler": "Warchief Grom", "culture": "Nomadic raiders", "allies": [], "enemies": ["Kingdom of Valoria"]}
+    ]
+
+async def _generate_family_feuds(world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate family feuds for the world."""
+    
+    prompt = (
+        "Generate 3-5 family feuds for a dark fantasy world.\n"
+        "Family Types: Noble Houses (e.g., 'House Stark'), Merchant Dynasties, Clans\n"
+        "Instructions:\n"
+        "1. For each feud, provide: house1 (family name), house2 (rival family name), reason (1 sentence), severity ('rivalry', 'vendetta', or 'blood_feud').\n"
+        "2. Reasons: Ancient betrayal, land dispute, assassination, forbidden love, broken oath.\n"
+        "3. Severity: Rivalry (mild dislike), Vendetta (serious grudge), Blood Feud (generational hatred).\n"
+        "4. Make feuds dramatic and personal (Game of Thrones style).\n"
+        "5. Output JSON: [{'house1': 'House Stark', 'house2': 'House Bolton', 'reason': 'The Boltons betrayed the Starks in battle', 'severity': 'blood_feud'}, ...]\n"
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a world-builder. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=45
+        )
+        json_match = re.search(r"\[[\s\S]*\]", raw)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception as e:
+        logger.warning(f"Family feud generation failed: {e}")
+    
+    # Fallback: Basic feuds
+    return [
+        {"house1": "House Stark", "house2": "House Bolton", "reason": "The Boltons betrayed the Starks in a crucial battle", "severity": "blood_feud"},
+        {"house1": "House Lannister", "house2": "House Tyrell", "reason": "A broken marriage pact and stolen gold", "severity": "vendetta"},
+        {"house1": "Clan Ironforge", "house2": "Clan Blackhammer", "reason": "Disputed mining rights in the mountains", "severity": "rivalry"}
+    ]
+
 async def _build_campaign_world(state: Dict[str, Any]) -> str:
     messages = [
         {
@@ -2326,6 +2910,8 @@ async def _build_campaign_world(state: Dict[str, Any]) -> str:
             "content": (
                 "You are a game world architect for a dark fantasy dungeon crawl. "
                 "Write 2 short sentences describing: setting, factions, and the current crisis. "
+                "CRITICALLY: Include 1-2 'Major Catastrophes' (e.g. a Tyrant Lich, Waking Dragon, Spreading Plague, or Mad King). "
+                "Give these threats specific names. They must be active and dangerous. "
                 "Keep it grounded and gameable. "
                 "Mature themes (violence, horror, moral ambiguity) are allowed, "
                 "but avoid explicit sexual content."
@@ -2352,6 +2938,78 @@ async def _build_campaign_world(state: Dict[str, Any]) -> str:
         return DEFAULT_CAMPAIGN_WORLD
     return text or DEFAULT_CAMPAIGN_WORLD
 
+async def _generate_factions(world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    campaign = world_state.get("campaign")
+    campaign_summary = str(campaign.get("summary") or "") if campaign else ""
+    
+    prompt = (
+        "Create 3 Distinct Major Factions for this world.\n"
+        f"Campaign Context: {campaign_summary}\n"
+        "1. Order/Law Faction (e.g. Iron Legion, The Priesthood)\n"
+        "2. Chaos/Criminal Faction (e.g. The Red Hand, Cult of the Eye)\n"
+        "3. Neutral/Mercantile Faction (e.g. The Silver Circle, Trade Kings)\n"
+        "For EACH faction, provide: Name, Ethos (1 sentence), Leader, and Rival (which of the other two they hate).\n"
+        "Output JSON: [{'name': '...', 'ethos': '...', 'leader': '...', 'rival': '...'}, ...]"
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a world builder. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=60
+        )
+        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception as e:
+        logger.warning(f"Faction generation failed: {e}")
+    
+    # Fallback
+    return [
+        {"name": "The Iron Vanguard", "ethos": "Order through steel.", "leader": "General Marcus", "rival": "The Red Syndicate"},
+        {"name": "The Red Syndicate", "ethos": "Profit above all.", "leader": "Lady V", "rival": "The Iron Vanguard"},
+        {"name": "The Seekers", "ethos": "Knowledge is power.", "leader": "Archmage Sol", "rival": "The Iron Vanguard"}
+    ]
+
+async def _generate_pantheon(world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    campaign = world_state.get("campaign")
+    campaign_summary = str(campaign.get("summary") or "") if campaign else ""
+    
+    prompt = (
+        "Create 3-4 Distinct Gods/Deities for this world.\n"
+        f"Campaign Context: {campaign_summary}\n"
+        "Include a mix of domains: War, Life, Secrets/Trickery, Nature/Grave.\n"
+        "For EACH deity, provide: Name, Domain, Title (e.g. The Weeping King), and 1 commandment.\n"
+        "Output JSON: [{'name': '...', 'domain': '...', 'title': '...', 'commandment': '...'}, ...]"
+    )
+    
+    messages = [
+        {"role": "system", "content": "You are a world builder. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=60
+        )
+        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception as e:
+        logger.warning(f"Pantheon generation failed: {e}")
+    
+    # Fallback
+    return [
+        {"name": "Aethelgard", "domain": "War & Honor", "title": "The Iron Father", "commandment": "Never strike an unarmed foe."},
+        {"name": "Sylva", "domain": "Nature & Growth", "title": "Mother Root", "commandment": "Respect the wild places."},
+        {"name": "Vex", "domain": "Secrets & Shadows", "title": " The Whispering One", "commandment": "Truth is a weapon; hide it well."}
+    ]
+
 async def _build_campaign_brief_from_world(
     world_seed: str,
     name: str,
@@ -2371,6 +3029,8 @@ async def _build_campaign_brief_from_world(
                 "You are a campaign designer for a dark fantasy dungeon crawl. "
                 "Write a compact campaign brief in 2-3 sentences. "
                 "Include: setting, central threat, and an immediate opening problem. "
+                "Explicitly name the Major Catastrophe (Lich, Dragon, etc.) if present in the world state. "
+                "The campaign should focus on surviving or stopping this threat. "
                 "Mature themes are allowed "
                 "(violence, horror, intimacy, moral ambiguity). "
                 "Keep it punchy and gameable."
@@ -2628,24 +3288,71 @@ def _generate_scene_context() -> Dict[str, str]:
         "atmosphere": random.choice(atmospheres),
     }
 
-async def _build_npc_roster(location_name: str, context: Dict[str, str], world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def _build_npc_roster(
+    location_name: str, 
+    context: Dict[str, str], 
+    world_state: Dict[str, Any],
+    controlling_faction: Optional[Dict[str, Any]] = None,
+    dominant_faith: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
     campaign_summary = ""
     campaign = world_state.get("campaign")
     if isinstance(campaign, dict):
         campaign_summary = str(campaign.get("summary") or "").strip()
+
+    # Faction Context
+    faction_text = ""
+    if controlling_faction:
+        faction_text = (
+            f"LOCATION CONTROL: This place is controlled by '{controlling_faction.get('name')}' ({controlling_faction.get('ethos')}).\n"
+            "LOA: Most NPCs should be loyal to this faction, but 1 might be a spy for a rival.\n"
+        )
+
+    # Faith Context
+    faith_text = ""
+    if dominant_faith:
+        faith_text = (
+            f"RELIGION: The dominant faith here is '{dominant_faith.get('name')}' ({dominant_faith.get('domain')}).\n"
+            f"COMMANDMENT: {dominant_faith.get('commandment')}\n"
+            "Include at least one NPC who is devout or a member of the clergy.\n"
+        )
+
+    # Reputation Context
+    reputation = world_state.get("reputation", 0)
+    rep_desc = "Unknown"
+    if reputation > 5: rep_desc = "Heroic (Respected)"
+    elif reputation < -5: rep_desc = "Villainous (Feared)"
+    elif reputation > 0: rep_desc = "Positive"
+    elif reputation < 0: rep_desc = "Negative"
         
     prompt = (
         f"Create a roster of 3-5 distinct NPCs for a setting: {location_name}.\n"
         f"Context: It is {context['time']} on {context['day']}. The place is {context['crowd']} and {context['atmosphere']}.\n"
         f"Campaign Context: {campaign_summary}\n"
+        f"{faction_text}"
+        f"{faith_text}"
+        f"Player Reputation: {rep_desc} (Score: {reputation}). Adjust NPC Dispositions accordingly (e.g. Criminals like Villains, Guards hate them).\n"
         "For EACH NPC, provide:\n"
         "1. Name and Role (e.g., Bartender, Patron, Spy)\n"
-        "2. Appearance and Mannerism (1 sentence)\n"
-        "3. Motivation (Why are they here right now?)\n"
-        "4. Secret (Something they won't reveal without a bribe or high trust)\n"
-        "5. Relationships (One connection to another NPC in this list, and thoughts on the Player if applicable)\n"
-        "6. Disposition Score (A number from 2 to 12. 2=Hostile, 7=Neutral, 12=Friendly)\n"
-        "Output in JSON format: [{ 'name': '...', 'role': '...', 'description': '...', 'motivation': '...', 'secret': '...', 'relationships': '...', 'disposition_score': 7 }, ...]"
+        "2. Appearance (Visual details, distinct features)\n"
+        "3. Mannerism (Voice, habits, quirks)\n"
+        "4. Backstory (2-3 sentences: origin, past trauma, or defining moment)\n"
+        "5. Motivation (Why are they here right now?)\n"
+        "6. Secret (Something they won't reveal without a bribe or high trust)\n"
+        "7. Relationships (One connection to another NPC in this list, and thoughts on the Player if applicable)\n"
+        "8. Disposition Score (A number from 2 to 12. 2=Hostile, 7=Neutral, 12=Friendly)\n"
+        "9. Stats (D&D 5e Ability Scores: str, dex, con, int, wis, cha. Vary based on role, e.g. Guard=High Str, Spy=High Dex)\n"
+        "10. Faction Loyalty (Name of the faction they support, or 'Neutral')\n"
+        "11. Faith (Name of the deity they worship, or 'None')\n"
+        "12. Race (Choose from: Human, Elf, Dwarf, Halfling, Orc, Tiefling, Dragonborn, Gnome)\n"
+        "13. Guild (Optional: Guild affiliation if applicable, e.g., 'Thieves Guild', 'Merchants Guild', or 'None')\n"
+        "14. Social Class (Choose from: Nobility, Gentry, Merchant Class, Commoner, Peasant, Outcast)\n"
+        "15. Magic Philosophy (Optional: For mages/clerics, e.g., 'Evocation Academy', 'Necromancy Circle', 'Church of Light', or 'None')\n"
+        "16. Homeland (Nation/region of origin, e.g., 'Kingdom of Valoria', 'Dark Empire', 'Orcish Steppes')\n"
+        "17. Family (Noble house/clan, e.g., 'House Stark', 'Clan Ironforge', or 'None' for commoners)\n"
+        "18. Sexuality (Choose from: Heterosexual, Homosexual, Bisexual, Pansexual, Asexual)\n"
+        "19. Physical Preference (What they're attracted to: Tall, Muscular, Slender, Curvy, Rugged, Delicate, or 'None' if Asexual)\n"
+        "Output in JSON format: [{ 'name': '...', 'role': '...', 'appearance': '...', 'mannerism': '...', 'backstory': '...', 'motivation': '...', 'secret': '...', 'relationships': '...', 'disposition_score': 7, 'stats': {...}, 'faction': '...', 'faith': '...', 'race': '...', 'guild': '...', 'social_class': '...', 'magic_philosophy': '...', 'homeland': '...', 'family': '...', 'sexuality': '...', 'physical_preference': '...' }, ...]\n"
     )
     
     messages = [
@@ -2666,7 +3373,180 @@ async def _build_npc_roster(location_name: str, context: Dict[str, str], world_s
         # Attempt to parse JSON from the response
         json_match = re.search(r"\[.*\]", raw, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group(0))
+            npcs = json.loads(json_match.group(0))
+            
+            # Apply racial bias to disposition scores
+            player_race = world_state.get("character", {}).get("race")
+            racial_tensions = world_state.get("racial_tensions", {})
+            
+            if player_race and racial_tensions:
+                for npc in npcs:
+                    npc_race = npc.get("race")
+                    if npc_race and npc_race in racial_tensions:
+                        bias = racial_tensions.get(npc_race, {}).get(player_race, 0)
+                        if bias != 0:
+                            # Apply bias (scale down by 10 to keep disposition in 2-12 range)
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) + (bias // 10)))
+                            npc["racial_bias_applied"] = bias
+            
+            # Apply guild bias to disposition scores
+            player_guild = world_state.get("character", {}).get("guild")
+            guilds = world_state.get("guilds", [])
+            
+            if player_guild and guilds:
+                # Find player's guild and its rivals
+                player_guild_data = next((g for g in guilds if g.get("name") == player_guild), None)
+                rival_guilds = player_guild_data.get("rivals", []) if player_guild_data else []
+                
+                for npc in npcs:
+                    npc_guild = npc.get("guild")
+                    if npc_guild and npc_guild != "None":
+                        if npc_guild == player_guild:
+                            # Same guild: +2 disposition
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) + 2))
+                            npc["guild_bias_applied"] = "+2 (same guild)"
+                        elif npc_guild in rival_guilds:
+                            # Rival guild: -2 disposition
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) - 2))
+                            npc["guild_bias_applied"] = "-2 (rival guild)"
+            
+            # Apply class bias to disposition scores
+            player_class = world_state.get("character", {}).get("social_class", "Commoner")
+            class_hierarchy = {
+                "Nobility": 6, "Gentry": 5, "Merchant Class": 4, 
+                "Commoner": 3, "Peasant": 2, "Outcast": 1
+            }
+            player_rank = class_hierarchy.get(player_class, 3)
+            
+            for npc in npcs:
+                npc_class = npc.get("social_class")
+                if npc_class:
+                    npc_rank = class_hierarchy.get(npc_class, 3)
+                    
+                    if npc_class == player_class:
+                        # Same class: +1 disposition
+                        npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) + 1))
+                        npc["class_bias_applied"] = "+1 (same class)"
+                    elif abs(npc_rank - player_rank) >= 3:
+                        # Large class gap: -2 disposition (nobles disdain peasants, vice versa)
+                        npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) - 2))
+                        npc["class_bias_applied"] = "-2 (class gap)"
+                    elif abs(npc_rank - player_rank) == 2:
+                        # Medium class gap: -1 disposition
+                        npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) - 1))
+                        npc["class_bias_applied"] = "-1 (class difference)"
+            
+            # Apply magic philosophy bias to disposition scores
+            player_philosophy = world_state.get("character", {}).get("magic_philosophy")
+            philosophies = world_state.get("magic_philosophies", [])
+            
+            if player_philosophy and philosophies:
+                # Find player's philosophy and its rivals
+                player_phil_data = next((p for p in philosophies if p.get("name") == player_philosophy), None)
+                rival_philosophies = player_phil_data.get("rivals", []) if player_phil_data else []
+                player_is_mage = player_phil_data.get("type") in ["arcane_school", "wild_magic"] if player_phil_data else False
+                
+                for npc in npcs:
+                    npc_philosophy = npc.get("magic_philosophy")
+                    if npc_philosophy and npc_philosophy != "None":
+                        npc_phil_data = next((p for p in philosophies if p.get("name") == npc_philosophy), None)
+                        npc_is_anti_magic = npc_phil_data.get("type") == "anti_magic" if npc_phil_data else False
+                        
+                        if npc_philosophy == player_philosophy:
+                            # Same philosophy: +2 disposition
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) + 2))
+                            npc["philosophy_bias_applied"] = "+2 (same philosophy)"
+                        elif npc_philosophy in rival_philosophies:
+                            # Rival philosophy: -3 disposition (stronger than other conflicts)
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) - 3))
+                            npc["philosophy_bias_applied"] = "-3 (rival philosophy)"
+                        elif npc_is_anti_magic and player_is_mage:
+                            # Anti-magic vs mage: -4 disposition (strongest conflict)
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) - 4))
+                            npc["philosophy_bias_applied"] = "-4 (anti-magic vs mage)"
+            
+            # Apply homeland bias to disposition scores
+            player_homeland = world_state.get("character", {}).get("homeland")
+            homelands = world_state.get("homelands", [])
+            
+            if player_homeland and homelands:
+                # Find player's homeland and its allies/enemies
+                player_homeland_data = next((h for h in homelands if h.get("name") == player_homeland), None)
+                allied_homelands = player_homeland_data.get("allies", []) if player_homeland_data else []
+                enemy_homelands = player_homeland_data.get("enemies", []) if player_homeland_data else []
+                
+                for npc in npcs:
+                    npc_homeland = npc.get("homeland")
+                    if npc_homeland:
+                        if npc_homeland == player_homeland:
+                            # Same homeland: +2 disposition (patriotism)
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) + 2))
+                            npc["homeland_bias_applied"] = "+2 (same homeland)"
+                        elif npc_homeland in allied_homelands:
+                            # Allied homeland: +1 disposition
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) + 1))
+                            npc["homeland_bias_applied"] = "+1 (allied homeland)"
+                        elif npc_homeland in enemy_homelands:
+                            # Enemy homeland: -3 disposition (war/rivalry)
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) - 3))
+                            npc["homeland_bias_applied"] = "-3 (enemy homeland)"
+            
+            # Apply family feud bias to disposition scores
+            player_family = world_state.get("character", {}).get("family")
+            family_feuds = world_state.get("family_feuds", [])
+            
+            if player_family and player_family != "None" and family_feuds:
+                for npc in npcs:
+                    npc_family = npc.get("family")
+                    if npc_family and npc_family != "None":
+                        if npc_family == player_family:
+                            # Same family: +3 disposition (blood loyalty)
+                            npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) + 3))
+                            npc["family_bias_applied"] = "+3 (same family)"
+                        else:
+                            # Check for feuds
+                            for feud in family_feuds:
+                                if (feud.get("house1") == player_family and feud.get("house2") == npc_family) or \
+                                   (feud.get("house2") == player_family and feud.get("house1") == npc_family):
+                                    # Feuding family: -4 disposition (inherited hatred)
+                                    npc["disposition_score"] = max(2, min(12, npc.get("disposition_score", 7) - 4))
+                                    npc["family_bias_applied"] = f"-4 (feud: {feud.get('severity')})"
+                                    break
+            
+            # Apply sexual attraction override (FINAL LAYER - can override negative modifiers)
+            # Initialize attraction_score for dynamic attraction system
+            player_gender = world_state.get("character", {}).get("gender", "Unknown")
+            
+            for npc in npcs:
+                npc_sexuality = npc.get("sexuality", "Heterosexual")
+                npc_gender = npc.get("gender", "Unknown")
+                
+                # Initialize attraction_score (0-100, builds over time)
+                npc["attraction_score"] = 0
+                
+                # Determine if NPC is COMPATIBLE with player (not attracted yet, just compatible)
+                compatible = False
+                
+                if npc_sexuality == "Asexual":
+                    compatible = False
+                elif npc_sexuality == "Pansexual":
+                    compatible = True  # Can be attracted to anyone
+                elif npc_sexuality == "Bisexual":
+                    compatible = True  # Can be attracted to any gender
+                elif npc_sexuality == "Heterosexual":
+                    if (npc_gender == "Male" and player_gender == "Female") or \
+                       (npc_gender == "Female" and player_gender == "Male"):
+                        compatible = True
+                elif npc_sexuality == "Homosexual":
+                    if npc_gender == player_gender:
+                        compatible = True
+                
+                npc["attraction_compatible"] = compatible
+                
+                # No pre-generated attraction - it will build during interactions
+                # Disposition bonus will be applied dynamically based on attraction_score
+            
+            return npcs
         return []
     except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
         logger.warning(f"NPC generation failed for {location_name}: {e}")
@@ -2680,6 +3560,46 @@ async def _build_location_details(location_name: str, world_state: Dict[str, Any
         campaign_summary = str(campaign.get("summary") or "").strip()
 
     context = _generate_scene_context()
+    
+    # Faction Control
+    factions = world_state.get("factions", [])
+    controlling_faction = None
+    if factions and random.random() < 0.7: # 70% chance of faction control
+        controlling_faction = random.choice(factions)
+    
+    faction_context = ""
+    if controlling_faction:
+        faction_context = f"Controlled by Faction: {controlling_faction.get('name')} (Ethos: {controlling_faction.get('ethos')})."
+
+    # Faith Context
+    pantheon = world_state.get("pantheon", [])
+    dominant_faith = None
+    if pantheon and random.random() < 0.6: # 60% chance of distinct faith
+        dominant_faith = random.choice(pantheon)
+        
+    faith_context = ""
+    if dominant_faith:
+        faith_context = f"Dominant Faith: Shrine/Temple to {dominant_faith.get('name')} ({dominant_faith.get('domain')})."
+
+    # Dominant Race
+    races = ["Human", "Elf", "Dwarf", "Halfling", "Orc", "Tiefling", "Dragonborn", "Gnome"]
+    dominant_race = None
+    if random.random() < 0.5: # 50% chance of racial dominance
+        dominant_race = random.choice(races)
+    
+    race_context = ""
+    if dominant_race:
+        race_context = f"Dominant Race: This area is primarily inhabited by {dominant_race}s."
+
+    # Social Class
+    social_classes = ["Noble District", "Merchant Quarter", "Common District", "Slums"]
+    location_class = None
+    if random.random() < 0.4: # 40% chance of class dominance
+        location_class = random.choice(social_classes)
+    
+    class_context = ""
+    if location_class:
+        class_context = f"Social Class: This is a {location_class}."
 
     messages = [
         {
@@ -2697,10 +3617,12 @@ async def _build_location_details(location_name: str, world_state: Dict[str, Any
                 "Current world summary:\n"
                 f"{world_summary or 'None'}\n\n"
                 f"Location Name: {location_name}\n"
-                f"Scene Context: {context['time']} on {context['day']}. Crowd: {context['crowd']}. Atmosphere: {context['atmosphere']}.\n\n"
+                f"Scene Context: {context['time']} on {context['day']}. Crowd: {context['crowd']}. Atmosphere: {context['atmosphere']}.\n"
+                f"{faction_context}\n{faith_context}\n{race_context}\n{class_context}\n\n"
                 "Instructions:\n"
                 "- Generate a 2 paragraph description of the location, incorporating the specific time, crowd, and atmosphere.\n"
                 "- Include sensory details: smells, sounds, lighting.\n"
+                "- VISUAL CUES: If a Faction controls this place, describe their banners/guards. If a Faith is dominant, describe shrines/symbols.\n"
                 "- Mention specific details that hint at the generated context (e.g. if crowded, noise; if empty, silence).\n"
                 "- Include a secret or hidden detail about the location itself.\n"
                 "- Output only the description text.\n"
@@ -2726,14 +3648,70 @@ async def _build_location_details(location_name: str, world_state: Dict[str, Any
         return {}
         
     # Generate NPCs
-    npcs = await _build_npc_roster(location_name, context, world_state)
+    npcs = await _build_npc_roster(location_name, context, world_state, controlling_faction, dominant_faith)
     
     return {
         "description": description,
         "context": context,
         "npcs": npcs,
+        "controlling_faction": controlling_faction.get("name") if controlling_faction else None,
+        "dominant_faith": dominant_faith.get("name") if dominant_faith else None,
+        "dominant_race": dominant_race,
+        "social_class": location_class,
         "created_at": stamp_now()
     }
+
+async def _read_book(book_title: str, world_state: Dict[str, Any]) -> str:
+    # 1. Check persistence
+    if "books" not in world_state:
+        world_state["books"] = {}
+    
+    # Normalize title key
+    book_key = book_title.strip().lower()
+    
+    if book_key in world_state["books"]:
+        book_data = world_state["books"][book_key]
+        return f"You open '{book_data['title']}':\n\n{book_data['content']}\n\n[Effect: {book_data.get('effect', 'None')}]"
+
+    # 2. Generate new book
+    campaign = world_state.get("campaign")
+    campaign_summary = str(campaign.get("summary") or "") if campaign else ""
+    factions = world_state.get("factions", [])
+    pantheon = world_state.get("pantheon", [])
+    
+    prompt = (
+        f"Write the content of a book titled: '{book_title}'.\n"
+        f"Campaign Context: {campaign_summary}\n"
+        f"World Context: Factions={json.dumps(factions)}, Gods={json.dumps(pantheon)}\n"
+        "Instructions:\n"
+        "1. Determine the book's nature: Spellbook, History, Clue, or Fiction.\n"
+        "2. If Spellbook: Provide a specific spell name and effect (e.g., 'Fireball: Deals 2d6 fire damage').\n"
+        "3. If History: Reveal a detail about a Faction or God that is NOT widely known.\n"
+        "4. If Clue: Hint at a secret in the current location.\n"
+        "5. If Fiction: Write a short folktale, romance, or cookbook recipe. No mechanical effect. Just flavor.\n"
+        "6. Output JSON: {'title': 'Title', 'author': 'Name', 'type': 'spell|history|clue|fiction', 'content': 'The actual text...', 'effect': 'Mechanical benefit or None'}"
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a loremaster. Return ONLY valid JSON."},
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        # Use Heavy Model for quality book content
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL),
+            timeout=45
+        )
+        json_match = re.search(r"\{[\s\S]*\}", raw)
+        if json_match:
+            book_data = json.loads(json_match.group(0))
+            world_state["books"][book_key] = book_data
+            return f"You open '{book_data['title']}':\n\n{book_data['content']}\n\n[Effect: {book_data.get('effect', 'None')}]"
+    except Exception as e:
+        logger.warning(f"Book generation failed: {e}")
+        
+    return f"The pages of '{book_title}' are too damaged to read."
 
 
 
@@ -2761,11 +3739,11 @@ async def _build_npc_details(npc_name: str, world_state: Dict[str, Any]) -> str:
                 f"{world_summary or 'None'}\n\n"
                 f"NPC Name: {npc_name}\n\n"
                 "Instructions:\n"
-                "- Generate a 3-5 sentence description of the NPC's backstory, motivations, and a secret.\n"
-                "- Describe the NPC's appearance and mannerisms.\n"
+                "- Generate a detailed description (2 paragraphs) of the NPC.\n"
+                "- Include: Backstory (origins, trauma), Appearance (distinctive features), Mannerisms, and current Motivation.\n"
                 "- Provide a memorable quote from the NPC.\n"
-                "- Describe the NPC's relationship to the factions in the world.\n"
-                "- The description should be evocative and provide hooks for future adventures and roleplaying.\n"
+                "- Describe the NPC's secret and their relationship to the factions in the world.\n"
+                "- The description should be evocative, dark, and provide hooks for future adventures.\n"
                 "- Output only the description of the NPC.\n"
             ),
         },
@@ -2954,6 +3932,45 @@ async def generate_narrator_intro_followup(
         text, _ = split_narration_hint(text)
         return strip_state_leaks(text, state, world_state)
     return ""
+
+async def generate_npc_dialogue_turn(
+    speaker: Dict[str, Any],
+    listener: Dict[str, Any],
+    topic: str,
+    history: List[str],
+    context: str,
+) -> str:
+    prompt = (
+        f"Scene Context: {context}\n"
+        f"Conversation Topic: {topic}\n"
+        f"Previous Lines:\n" + ("\n".join(history) if history else "None") + "\n\n"
+        f"You are {speaker['name']} ({speaker.get('role', 'NPC')}).\n"
+        f"Style: {speaker.get('mannerism', 'Standard')}.\n"
+        f"Motivation: {speaker.get('motivation', 'Unknown')}.\n"
+        f"You are speaking to {listener['name']}.\n"
+        "Instruction: Write EXACTLY ONE sentence of dialogue in character. "
+        "Do not describe actions, only speech. React to the previous line if any."
+    )
+    messages = [
+        {"role": "system", "content": "You are a roleplaying actor. specific, vivid, and concise."},
+        {"role": "user", "content": prompt},
+    ]
+    try:
+        raw = await asyncio.wait_for(
+            ollama_chat_with_model(
+                messages, 
+                fast=False, 
+                model_name=HEAVY_MODEL_NAME, 
+                fallback_model=HEAVY_FALLBACK_MODEL
+            ), 
+            timeout=10
+        )
+        text = strip_thoughts(raw).strip()
+        # Clean up quotes if present
+        text = text.strip('"').strip("'")
+        return text
+    except Exception:
+        return "..."
 
 def build_campaign_intro_fallback(
     world_state: Dict[str, Any], name: str, klass: str
@@ -3388,9 +4405,8 @@ async def wallet_verify(payload: WalletVerifyRequest):
     user["provider"] = "wallet"
     user["guest"] = False
     wallet_nonces.pop(address, None)
-    save_simple_store(WALLET_NONCES_PATH, wallet_nonces)
     save_simple_store(USERS_STORE_PATH, users_store)
-    return AuthResponse(token=token, credits=int(user.get("credits", 0)), wallet=user.get("wallet"))
+    return AuthResponse(token=token, credits=int(user.get("credits", 0)), wallet=user.get("wallet"), id=user.get("id"))
 
 @app.post("/api/auth/google", response_model=AuthResponse)
 async def auth_google(payload: GoogleAuthRequest):
@@ -3416,7 +4432,81 @@ async def auth_google(payload: GoogleAuthRequest):
     user["provider"] = "google"
     user["guest"] = False
     save_simple_store(USERS_STORE_PATH, users_store)
-    return AuthResponse(token=token, credits=int(user.get("credits", 0)), wallet=user.get("wallet"))
+    save_simple_store(USERS_STORE_PATH, users_store)
+    return AuthResponse(token=token, credits=int(user.get("credits", 0)), wallet=user.get("wallet"), id=user.get("id"))
+
+@app.post("/api/auth/email/register", response_model=AuthResponse)
+async def auth_email_register(payload: EmailAuthRequest):
+    email = payload.email.lower().strip()
+    if not email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email and password required")
+
+    # Check if email exists
+    for uid, u in users_store.items():
+        if u.get("email") == email:
+             raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Account Promotion Logic
+    if payload.guest_token:
+        guest_user = get_user_by_token(payload.guest_token)
+        if guest_user and guest_user.get("guest"):
+            # Promote this user
+            guest_user["email"] = email
+            guest_user["hashed_password"] = get_password_hash(payload.password)
+            guest_user["guest"] = False
+            guest_user["provider"] = "email"
+            # Keep existing ID, wallet, credits, token
+            save_simple_store(USERS_STORE_PATH, users_store)
+            return AuthResponse(
+                token=guest_user["token"], 
+                credits=int(guest_user.get("credits", 0)), 
+                wallet=guest_user.get("wallet"), 
+                id=guest_user["id"]
+            )
+
+    # Standard New User Registration
+    user_id = str(uuid.uuid4())
+    token = str(uuid.uuid4())
+    users_store[user_id] = {
+        "id": user_id,
+        "email": email,
+        "hashed_password": get_password_hash(payload.password),
+        "wallet": None,
+        "credits": STARTING_CREDITS,
+        "token": token,
+        "guest": False,
+        "provider": "email",
+    }
+    save_simple_store(USERS_STORE_PATH, users_store)
+    return AuthResponse(token=token, credits=int(STARTING_CREDITS), wallet=None, id=user_id)
+
+@app.post("/api/auth/email/login", response_model=AuthResponse)
+async def auth_email_login(payload: EmailAuthRequest):
+    email = payload.email.lower().strip()
+    # Find user by email
+    user = None
+    for uid, u in users_store.items():
+        if u.get("email") == email:
+            user = u
+            break
+    
+    if not user or not user.get("hashed_password"):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+    if not verify_password(payload.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Create new session token on login
+    token = str(uuid.uuid4())
+    user["token"] = token
+    save_simple_store(USERS_STORE_PATH, users_store)
+    return AuthResponse(
+        token=token, 
+        credits=int(user.get("credits", 0)), 
+        wallet=user.get("wallet"), 
+        id=user.get("id")
+    )
+
 
 @app.post("/api/auth/guest", response_model=AuthResponse)
 async def auth_guest():
@@ -3432,7 +4522,7 @@ async def auth_guest():
         "provider": "guest",
     }
     save_simple_store(USERS_STORE_PATH, users_store)
-    return AuthResponse(token=token, credits=int(STARTING_CREDITS), wallet=None)
+    return AuthResponse(token=token, credits=int(STARTING_CREDITS), wallet=None, id=user_id)
 
 @app.get("/api/me")
 async def get_me(user: Dict[str, Any] = Depends(require_auth)):
@@ -3442,6 +4532,7 @@ async def get_me(user: Dict[str, Any] = Depends(require_auth)):
         "credits": int(user.get("credits", 0)),
         "guest": bool(user.get("guest")),
         "provider": user.get("provider"),
+        "id": user.get("id"),
     }
 
 @app.post("/api/redeem", response_model=RedeemResponse)
@@ -3519,8 +4610,9 @@ async def list_payment_packs():
 async def create_payment_order(payload: PaymentCreateRequest, user: Dict[str, Any] = Depends(require_auth)):
     if not PAYMENT_WALLET_ADDRESS:
         raise HTTPException(status_code=400, detail="Payment wallet not configured")
-    if not user.get("wallet"):
-        raise HTTPException(status_code=400, detail="Wallet login required")
+    # Wallet login no longer required - Guest users can create USDT payment orders
+    # if not user.get("wallet"):
+    #     raise HTTPException(status_code=400, detail="Wallet login required")
     credits = int(payload.credits)
     if credits <= 0:
         raise HTTPException(status_code=400, detail="Credits must be positive")
@@ -3536,7 +4628,7 @@ async def create_payment_order(payload: PaymentCreateRequest, user: Dict[str, An
         "id": order_id,
         "user_id": user.get("id"),
         "email": user.get("email"),
-        "wallet": user.get("wallet"),
+        "wallet": user.get("wallet"),  # May be None for Guest users
         "credits": credits,
         "amount": amount_str,
         "address": PAYMENT_WALLET_ADDRESS,
@@ -3596,6 +4688,42 @@ async def register_play_purchase(
     save_payments()
     return PlayPurchaseResponse(credits=int(user.get("credits", 0)), product=product_id)
 
+class SessionSummary(BaseModel):
+    session_id: str
+    created_at: str
+    character_name: Optional[str] = None
+    character_level: Optional[int] = None
+    character_class: Optional[str] = None
+    summary: Optional[str] = None
+
+class SessionListResponse(BaseModel):
+    sessions: List[SessionSummary]
+
+@app.get("/api/sessions", response_model=SessionListResponse, dependencies=[Depends(verify_api_key)])
+async def list_user_sessions(user: Dict[str, Any] = Depends(require_auth)):
+    user_id = user.get("id")
+    result = []
+    # Sort by created_at desc (newest first)
+    sorted_items = sorted(sessions.items(), key=lambda x: x[1].get("created_at", ""), reverse=True)
+    
+    for session_id, session in sorted_items:
+        if session.get("user_id") == user_id:
+            game_state = session.get("game_state", {})
+            pc = game_state.get("character", {})
+            # Safe access to world state
+            ws = world_state_store.get(session_id, {})
+            campaign_summary = ws.get("campaign", {}).get("summary")
+            
+            result.append(SessionSummary(
+                session_id=session_id,
+                created_at=session.get("created_at", ""),
+                character_name=pc.get("name"),
+                character_level=pc.get("level"),
+                character_class=pc.get("class"),
+                summary=campaign_summary
+            ))
+    return SessionListResponse(sessions=result)
+
 @app.post("/api/sessions", response_model=CreateSessionResponse, dependencies=[Depends(verify_api_key)])
 async def create_session(payload: CreateSessionRequest, user: Dict[str, Any] = Depends(require_auth)):
     session_id = str(uuid.uuid4())
@@ -3608,6 +4736,7 @@ async def create_session(payload: CreateSessionRequest, user: Dict[str, Any] = D
     else:
         messages = [{"role": "system", "content": system_prompt}]
     sessions[session_id] = {
+        "user_id": user.get("id"),
         "created_at": datetime.utcnow().isoformat(),
         "metadata": payload.metadata or {},
         "messages": messages,
@@ -3630,6 +4759,7 @@ async def import_session(payload: ImportSessionRequest, user: Dict[str, Any] = D
     if not has_system:
         messages.insert(0, {"role": "system", "content": system_prompt})
     sessions[session_id] = {
+        "user_id": user.get("id"),
         "created_at": datetime.utcnow().isoformat(),
         "metadata": payload.metadata or {},
         "messages": messages,
@@ -3648,6 +4778,8 @@ async def get_session_details(session_id: str, user: Dict[str, Any] = Depends(re
     session = sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session.get("user_id") and session.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
     return session
 
 @app.get("/api/sessions/{session_id}/messages", dependencies=[Depends(verify_api_key)])
@@ -3655,6 +4787,8 @@ async def get_session_messages_list(session_id: str, user: Dict[str, Any] = Depe
     session = sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session.get("user_id") and session.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
     return session.get("messages", [])
 
 @app.post(
@@ -3668,6 +4802,8 @@ async def send_message(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     session = get_session_or_404(session_id)
+    if session.get("user_id") and session.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
     if user.get("credits", 0) <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
     ensure_session_state(session)
@@ -3789,11 +4925,21 @@ async def send_message(
         raise HTTPException(status_code=502, detail=f"Ollama error: {exc}") from exc
     response_parts = response_parts if "response_parts" in locals() else None
     if response_parts:
+        # Strip NARRATION_HINT from all parts
+        cleaned_parts = []
         for part in response_parts:
-            cleaned = part.strip()
+            cleaned, hint = split_narration_hint(part.strip())
+            if hint:
+                session["game_state"]["narration_hint"] = hint
             if cleaned:
-                session["messages"].append({"role": "assistant", "content": cleaned})
-        session["last_assistant_message"] = response_parts[-1].strip()
+                cleaned_parts.append(cleaned)
+        if cleaned_parts:
+            for part in cleaned_parts:
+                session["messages"].append({"role": "assistant", "content": part})
+            session["last_assistant_message"] = cleaned_parts[-1]
+        else:
+            # Fallback if all parts were just hints
+            session["last_assistant_message"] = ""
     else:
         session["messages"].append({"role": "assistant", "content": response_text})
         session["last_assistant_message"] = response_text
@@ -3835,6 +4981,8 @@ async def continue_message(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     session = get_session_or_404(session_id)
+    if session.get("user_id") and session.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
     if user.get("credits", 0) <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
     ensure_session_state(session)
@@ -3918,14 +5066,18 @@ async def continue_message(
 
 @app.post("/api/sessions/{session_id}/stream", dependencies=[Depends(verify_api_key)])
 async def stream_message(session_id: str, payload: SendMessageRequest, user: Dict[str, Any] = Depends(require_auth)):
+    session = get_session_or_404(session_id)
+    if session.get("user_id") and session.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
     if user.get("credits", 0) <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
-    session = get_session_or_404(session_id)
     return await stream_response(session, payload.message, bool(payload.fast), user=user)
 
 @app.get("/api/sessions/{session_id}/status", dependencies=[Depends(verify_api_key)])
 async def session_status(session_id: str, user: Dict[str, Any] = Depends(require_auth)):
     session = get_session_or_404(session_id)
+    if session.get("user_id") and session.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
     return {
         "pending_reply": bool(session.get("pending_reply")),
         "last_user_at": session.get("last_user_at"),
@@ -3940,9 +5092,11 @@ async def stream_message_get(
     fast: bool = Query(False),
     user: Dict[str, Any] = Depends(require_auth),
 ):
+    session = get_session_or_404(session_id)
+    if session.get("user_id") and session.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
     if user.get("credits", 0) <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
-    session = get_session_or_404(session_id)
     return await stream_response(session, message, fast, user=user)
 
 @app.post("/api/intro", response_model=IntroResponse)
@@ -3952,7 +5106,9 @@ async def generate_intro(payload: IntroRequest, user: Dict[str, Any] = Depends(r
     start_time = time.monotonic()
     try:
         temp_state = default_game_state()
-        temp_world = apply_character_to_world(default_world_state(), name, klass, None)
+        gender = (payload.gender or "").strip()
+        char_payload = {"gender": gender} if gender else None
+        temp_world = apply_character_to_world(default_world_state(), name, klass, char_payload)
         temp_world = await ensure_campaign_brief(
             temp_state,
             temp_world,
@@ -4135,7 +5291,10 @@ async def create_character(payload: CharacterCreateRequest):
         "max_hp": int(payload.max_hp),
         "hp": int(payload.max_hp),
         "weapons": weapons_payload,
+        "hp": int(payload.max_hp),
+        "weapons": weapons_payload,
         "race": payload.race,
+        "gender": payload.gender,
         "background": payload.background,
         "alignment": payload.alignment,
         "traits": list(payload.traits or []),
@@ -4318,7 +5477,7 @@ async def enemy_attack(session_id: str, narrate: bool = Query(False)):
     if chosen:
         action = chosen["action"]
         mechanics = chosen["mechanics"]
-        action_name = action.get("name") or "attack"
+        action_name = action.get("name")
         if mechanics.get("save"):
             save_ability = mechanics["save"]
             dc = mechanics.get("dc") or 10

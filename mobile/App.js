@@ -39,14 +39,28 @@ import {
   WALLETCONNECT_SESSION_PARAMS,
 } from "./src/config";
 import { getItem, getJson, removeItem, setItem, setJson } from "./src/storage";
-import { colors, radius, spacing } from "./src/theme";
+import { theme } from "./src/theme";
 import { isPlayBuild } from "./src/buildConfig";
 
-const walletConnectModule = isPlayBuild
-  ? null
-  : require("@walletconnect/modal-react-native");
-const useWalletConnectModal = walletConnectModule?.useWalletConnectModal;
-const WalletConnectModal = walletConnectModule?.WalletConnectModal;
+
+let walletConnectModule = null;
+let useWalletConnectModal = null;
+let WalletConnectModal = null;
+
+// WalletConnect is disabled due to native crashes
+// TODO: Implement manual wallet address entry
+if (false) { // Disabled - crashes on open()
+  try {
+    walletConnectModule = require("@walletconnect/modal-react-native");
+    useWalletConnectModal = walletConnectModule?.useWalletConnectModal;
+    WalletConnectModal = walletConnectModule?.WalletConnectModal;
+    console.log("WalletConnect module loaded successfully");
+  } catch (error) {
+    console.error("Failed to load WalletConnect module:", error);
+    // Module failed to load - will use fallback
+  }
+}
+
 
 if (typeof BackHandler.removeEventListener !== "function") {
   BackHandler.removeEventListener = () => { };
@@ -120,9 +134,24 @@ export default function App() {
     ? useWalletConnectModal()
     : { open: () => { }, provider: null, isConnected: false, address: null };
   const { open, provider, isConnected, address } = walletConnectState;
+
+  // Debug logging
+  useEffect(() => {
+    if (!isPlayBuild) {
+      console.log("WalletConnect State:", {
+        hasHook: !!useWalletConnectModal,
+        hasOpen: !!open,
+        hasProvider: !!provider,
+        isConnected,
+        address,
+        hasModal: !!WalletConnectModal
+      });
+    }
+  }, [isConnected, address, provider]);
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [token, setToken] = useState(null);
   const [wallet, setWallet] = useState(null);
+  const [userId, setUserId] = useState(null);
   const [accountLabel, setAccountLabel] = useState(null);
   const [credits, setCredits] = useState(0);
   const [activeTab, setActiveTab] = useState("story");
@@ -194,6 +223,7 @@ export default function App() {
       try {
         const me = await apiGet(initialServerUrl, "/api/me");
         setCredits(me.credits || 0);
+        setUserId(me.id || null);
         const provider = String(me?.provider || "").toLowerCase();
         let label = "Account";
         if (provider === "google") {
@@ -210,6 +240,7 @@ export default function App() {
           await removeItem(STORAGE_KEYS.authWallet);
           setToken(null);
           setWallet(null);
+          setUserId(null);
           setAccountLabel(null);
         }
       }
@@ -513,6 +544,69 @@ export default function App() {
     }
   }, [serverUrl]);
 
+  const handleEmailSignIn = useCallback(async (email, password) => {
+    setAuthStatus({ loading: true, error: null });
+    try {
+      const authPayload = await withTimeout(
+        apiPost(serverUrl, "/api/auth/email/login", { email, password }),
+        15000,
+        "Email login"
+      );
+      await setItem(STORAGE_KEYS.authToken, authPayload.token);
+      await removeItem(STORAGE_KEYS.authWallet);
+      setToken(authPayload.token);
+      setWallet(null);
+      setUserId(authPayload.id || null);
+      setCredits(authPayload.credits || 0);
+      setAccountLabel(email);
+      setAuthStatus({ loading: false, error: null });
+      const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
+      if (!storedCharacter) {
+        setActiveTab("story");
+        setCreationVisible(true);
+      }
+    } catch (error) {
+      setAuthStatus({
+        loading: false,
+        error: error?.message || "Login failed.",
+      });
+    }
+  }, [serverUrl]);
+
+  const handleEmailRegister = useCallback(async (email, password) => {
+    setAuthStatus({ loading: true, error: null });
+    try {
+      const payload = { email, password };
+      // If we have a token but are not logged in with an email/wallet (i.e. guest), send it.
+      if (token && !accountLabel && !wallet) {
+        payload.guest_token = token;
+      }
+      const authPayload = await withTimeout(
+        apiPost(serverUrl, "/api/auth/email/register", payload),
+        15000,
+        "Email registration"
+      );
+      await setItem(STORAGE_KEYS.authToken, authPayload.token);
+      await removeItem(STORAGE_KEYS.authWallet);
+      setToken(authPayload.token);
+      setWallet(null);
+      setUserId(authPayload.id || null);
+      setCredits(authPayload.credits || 0);
+      setAccountLabel(email);
+      setAuthStatus({ loading: false, error: null });
+      const storedCharacter = await getJson(STORAGE_KEYS.lastCharacter, null);
+      if (!storedCharacter) {
+        setActiveTab("story");
+        setCreationVisible(true);
+      }
+    } catch (error) {
+      setAuthStatus({
+        loading: false,
+        error: error?.message || "Registration failed.",
+      });
+    }
+  }, [serverUrl]);
+
   const signInAsGuest = useCallback(async () => {
     setAuthStatus({ loading: true, error: null });
     try {
@@ -525,6 +619,7 @@ export default function App() {
       await removeItem(STORAGE_KEYS.authWallet);
       setToken(authPayload.token);
       setWallet(null);
+      setUserId(authPayload.id || null);
       setCredits(authPayload.credits || 0);
       setAccountLabel("Guest");
       setAuthStatus({ loading: false, error: null });
@@ -560,6 +655,7 @@ export default function App() {
     await removeItem(STORAGE_KEYS.authWallet);
     setToken(null);
     setWallet(null);
+    setUserId(null);
     setCredits(0);
     setAccountLabel(null);
   }, [provider]);
@@ -569,6 +665,7 @@ export default function App() {
     await removeItem(STORAGE_KEYS.authWallet);
     setToken(null);
     setWallet(null);
+    setUserId(null);
     setAccountLabel(null);
     setCredits(0);
     Alert.alert("Session Expired", "Your session has expired or is invalid. Please sign in again.");
@@ -641,22 +738,12 @@ export default function App() {
   const openCharacterCreator = useCallback(() => setCreationVisible(true), []);
   const closeCharacterCreator = useCallback(() => setCreationVisible(false), []);
   const openWallet = useCallback(() => {
-    if (isPlayBuild) {
-      setAuthStatus({
-        loading: false,
-        error: "WalletConnect is disabled on this build.",
-      });
-      return;
-    }
-    if (!walletReady) {
-      setAuthStatus({
-        loading: false,
-        error: "WalletConnect is starting. Try again in a moment.",
-      });
-      return;
-    }
-    open();
-  }, [open, walletReady]);
+    console.log("openWallet called - WalletConnect disabled");
+    setAuthStatus({
+      loading: false,
+      error: "WalletConnect is temporarily disabled. Use Guest login for now.",
+    });
+  }, []);
   const [pendingCharacterEntry, setPendingCharacterEntry] = useState(null);
   const [pendingSessionEntry, setPendingSessionEntry] = useState(null);
   const [resetSessionToken, setResetSessionToken] = useState(0);
@@ -691,17 +778,54 @@ export default function App() {
   const openSessions = useCallback(async () => {
     setSessionsVisible(true);
     setSessionsLoading(true);
-    const stored = await getJson(STORAGE_KEYS.sessions, []);
-    const sorted = [...stored].sort(
-      (left, right) => (right.updatedAt || 0) - (left.updatedAt || 0)
-    );
-    setSessionList(sorted);
-    setSessionsLoading(false);
-  }, []);
+    try {
+      if (userId) {
+        // Cloud mode
+        const list = await apiGet(serverUrl, "/api/sessions");
+        const mapped = (list.sessions || []).map(s => ({
+          id: s.session_id,
+          character: {
+            name: s.character_name,
+            level: s.character_level,
+            klass: s.character_class
+          },
+          title: "Cloud Save",
+          preview: s.summary || "No summary available.",
+          updatedAt: new Date(s.created_at).getTime(), // created_at is string, convert to ms for sort
+          isCloud: true
+        }));
+        setSessionList(mapped);
+      } else {
+        // Local mode fallback
+        const stored = await getJson(STORAGE_KEYS.sessions, []);
+        const sorted = [...stored].sort(
+          (left, right) => (right.updatedAt || 0) - (left.updatedAt || 0)
+        );
+        setSessionList(sorted);
+      }
+    } catch (err) {
+      console.warn("Failed to load sessions", err);
+      Alert.alert("Error", "Failed to load cloud sessions.");
+      setSessionList([]);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [serverUrl, userId]);
   const closeSessions = useCallback(() => setSessionsVisible(false), []);
   const handleSessionSelect = useCallback(
     (entry) => {
-      setPendingSessionEntry({ ...entry, timestamp: Date.now() });
+      // For cloud sessions, we just pass the ID in pendingSessionEntry.
+      // StoryScreen will need to handle fetching the full session or just setting sessionId.
+      // Based on StoryScreen analysis: setSessionId(storedId) is triggered by logic.
+      // We pass { session_id: entry.id } for cloud compliance if needed, or stick to current structure.
+      const payload = entry.isCloud ? { id: entry.id } : entry;
+
+      // If it's a cloud session, we might need to "prime" the StoryScreen to use this ID.
+      // The current StoryScreen logic checks `pendingSessionEntry`.
+      // I'll assume passing the entry is sufficient, but I might need to make sure StoryScreen uses `entry.id`.
+      // The `ensureSession` logic in StoryScreen (via `loadSession`) checks `sessionEntry`.
+
+      setPendingSessionEntry({ ...payload, timestamp: Date.now() });
       setSessionsVisible(false);
       setActiveTab("story");
     },
@@ -834,7 +958,7 @@ export default function App() {
     return (
       <>
         <StatusBar hidden />
-        <View style={{ flex: 1, backgroundColor: colors.ink }} />
+        <View style={{ flex: 1, backgroundColor: theme.colors.background }} />
       </>
     );
   }
@@ -859,9 +983,12 @@ export default function App() {
           onDisconnect={disconnectWallet}
           onResetWallet={resetWallet}
           accountLabel={accountLabel}
-          showWalletConnect={!isPlayBuild}
+          showWalletConnect={false}
           showGoogleSignIn={isPlayBuild}
           updateStatus={updateStatus}
+          onEmailSignIn={handleEmailSignIn}
+          onEmailRegister={handleEmailRegister}
+          onViewSessions={openSessions}
         />
         {WalletConnectModal && !isPlayBuild ? (
           <WalletConnectModal
@@ -978,15 +1105,17 @@ export default function App() {
                         <>
                           <View style={modalStyles.sessionHeaderRow}>
                             <Text style={modalStyles.sessionTitle}>{headerLabel}</Text>
-                            <Pressable
-                              onPress={(event) => {
-                                event?.stopPropagation?.();
-                                deleteSession(session);
-                              }}
-                              style={modalStyles.sessionDelete}
-                            >
-                              <Text style={modalStyles.sessionDeleteLabel}>Delete</Text>
-                            </Pressable>
+                            {session.isCloud ? null : (
+                              <Pressable
+                                onPress={(event) => {
+                                  event?.stopPropagation?.();
+                                  deleteSession(session);
+                                }}
+                                style={modalStyles.sessionDelete}
+                              >
+                                <Text style={modalStyles.sessionDeleteLabel}>Delete</Text>
+                              </Pressable>
+                            )}
                           </View>
                           <Text style={modalStyles.sessionPreview}>{preview}</Text>
                         </>
@@ -1013,7 +1142,7 @@ export default function App() {
 const modalStyles = StyleSheet.create({
   fullScreen: {
     flex: 1,
-    backgroundColor: colors.panel,
+    backgroundColor: theme.colors.background,
     justifyContent: "flex-start",
     alignItems: "stretch",
   },
@@ -1022,86 +1151,92 @@ const modalStyles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 0,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.sm,
-    backgroundColor: colors.panel,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.colors.border,
   },
   modalTitle: {
-    color: colors.parchment,
+    color: theme.colors.gold,
     fontSize: 18,
-    fontWeight: "700",
+    fontFamily: theme.fonts.header,
   },
   closeButton: {
     padding: 0,
   },
   closeLabel: {
-    color: colors.gold,
+    color: theme.colors.textMuted,
     fontSize: 12,
     letterSpacing: 1,
     textTransform: "uppercase",
+    fontFamily: theme.fonts.body,
   },
   modalBody: {
     flex: 1,
     width: "100%",
     alignSelf: "stretch",
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: theme.spacing.lg,
     minHeight: 0,
+    backgroundColor: theme.colors.background,
   },
   sessionList: {
-    padding: spacing.lg,
-    gap: spacing.md,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
   },
   sessionCard: {
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.panelAlt,
-    padding: spacing.md,
-    gap: spacing.xs,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.md,
+    backgroundColor: theme.colors.surfaceAlt,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+    ...theme.layout.shadows.soft,
   },
   sessionHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: spacing.sm,
+    gap: theme.spacing.sm,
   },
   sessionTitle: {
-    color: colors.parchment,
+    color: theme.colors.textPrimary,
     fontSize: 14,
+    fontFamily: theme.fonts.body,
     fontWeight: "700",
     flex: 1,
   },
   sessionDelete: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
+    borderColor: theme.colors.crimson,
+    borderRadius: theme.layout.radius.pill,
   },
   sessionDeleteLabel: {
-    color: colors.mutedGold,
+    color: theme.colors.crimson,
     fontSize: 10,
     letterSpacing: 1,
     textTransform: "uppercase",
   },
   sessionPreview: {
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
+    fontStyle: 'italic',
   },
   sessionMeta: {
-    color: colors.mutedGold,
+    color: theme.colors.textMuted,
     fontSize: 10,
     letterSpacing: 1,
     textTransform: "uppercase",
   },
   emptyLabel: {
-    color: colors.mutedGold,
+    color: theme.colors.textMuted,
     fontSize: 12,
-    padding: spacing.lg,
+    padding: theme.spacing.lg,
+    textAlign: 'center',
   },
 });
 

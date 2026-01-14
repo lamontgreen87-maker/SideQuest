@@ -3,7 +3,7 @@ import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import Button from "../components/Button";
 import Field from "../components/Field";
 import Section from "../components/Section";
-import { colors, spacing } from "../theme";
+import { theme } from "../theme";
 
 export default function SettingsScreen({
   serverUrl,
@@ -15,10 +15,24 @@ export default function SettingsScreen({
   updateStatus,
   onSignOut,
   accountLabel,
+  userId,
   credits,
 }) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
+      <Section title="Account">
+        <Text style={styles.statusMuted}>
+          Account: {accountLabel || "Signed out"}
+        </Text>
+        {userId ? (
+          <Text style={styles.statusMuted} selectable>
+            ID: {userId}
+          </Text>
+        ) : null}
+        <Text style={styles.statusMuted}>Credits: {credits}</Text>
+        <Button label="Sign Out" onPress={onSignOut} variant="danger" />
+      </Section>
+
       <Section title="Server">
         <Field
           label="Server URL"
@@ -38,14 +52,6 @@ export default function SettingsScreen({
             variant="ghost"
           />
         </View>
-      </Section>
-
-      <Section title="Account">
-        <Text style={styles.statusMuted}>
-          Account: {accountLabel || "Signed out"}
-        </Text>
-        <Text style={styles.statusMuted}>Credits: {credits}</Text>
-        <Button label="Sign Out" onPress={onSignOut} variant="danger" />
       </Section>
 
       <Section title="Updates">
@@ -72,21 +78,23 @@ export default function SettingsScreen({
 
 const styles = StyleSheet.create({
   content: {
-    gap: spacing.lg,
+    gap: theme.spacing.lg,
   },
   row: {
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: theme.spacing.sm,
     flexWrap: "wrap",
   },
   statusMuted: {
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     fontSize: 12,
-    marginBottom: spacing.sm,
+    marginBottom: theme.spacing.sm,
+    fontFamily: theme.fonts.body,
   },
   statusWarn: {
-    color: colors.warning,
+    color: theme.colors.gold,
     fontSize: 12,
-    marginBottom: spacing.sm,
+    marginBottom: theme.spacing.sm,
+    fontFamily: theme.fonts.body,
   },
 });

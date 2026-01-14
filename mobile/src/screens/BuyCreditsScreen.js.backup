@@ -1,0 +1,335 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
+import * as RNIap from "react-native-iap";
+import Button from "../components/Button";
+import { apiPost } from "../api/client";
+import { colors, radius, spacing } from "../theme";
+import { isPlayBuild } from "../buildConfig";
+
+const PLAY_PRODUCTS = [
+  { id: "credits_100", credits: 100, label: "100 Credits", fallbackPrice: "$1.00" },
+  { id: "credits_400", credits: 400, label: "400 Credits", fallbackPrice: "$4.00" },
+  { id: "credits_1000", credits: 1000, label: "1000 Credits", fallbackPrice: "$10.00" },
+];
+
+async function safeGetProducts(productIds) {
+  if (!productIds?.length) return [];
+  if (RNIap?.fetchProducts) {
+    try {
+      return await RNIap.fetchProducts({ skus: productIds, type: "in-app" });
+    } catch (error) {
+      // fall through to legacy getters
+    }
+  }
+  if (!RNIap?.getProducts) return [];
+  try {
+    return await RNIap.getProducts({ skus: productIds });
+  } catch (error) {
+    try {
+      return await RNIap.getProducts(productIds);
+    } catch (innerError) {
+      return [];
+    }
+  }
+}
+
+async function safeRequestPurchase(productId) {
+  if (!RNIap?.requestPurchase) {
+    throw new Error("Billing module not available.");
+  }
+  const request = {
+    type: "in-app",
+    request: Platform.OS === "android"
+      ? { android: { skus: [productId] } }
+      : { apple: { sku: productId } },
+  };
+  try {
+    await RNIap.requestPurchase(request);
+    return;
+  } catch (error) {
+    // Legacy fallbacks for older native builds.
+    try {
+      await RNIap.requestPurchase({ sku: productId });
+      return;
+    } catch (innerError) {
+      await RNIap.requestPurchase({ skus: [productId] });
+    }
+  }
+}
+
+export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate, onOpenWallet }) {
+  // For Amazon builds, show USDT/WalletConnect payment UI
+  if (!isPlayBuild) {
+    return \u003cUSDTPaymentScreen serverUrl = { serverUrl } onCreditsUpdate = { onCreditsUpdate } onOpenWallet = { onOpenWallet } />;
+  }
+
+  // For Play builds, show Google Play IAP
+  const [iapReady, setIapReady] = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [status, setStatus] = useState({ error: null, message: null });
+  const [busyProduct, setBusyProduct] = useState(null);
+  const handledTokensRef = useRef(new Set());
+  const iapModule = RNIap ?? {};
+
+  const productMap = useMemo(() => {
+    const map = new Map();
+    products.forEach((product) => map.set(product.productId, product));
+    return map;
+  }, [products]);
+
+  const refreshProducts = useCallback(async () => {
+    setLoadingProducts(true);
+    const fetched = await safeGetProducts(PLAY_PRODUCTS.map((item) => item.id));
+    if (fetched?.length) {
+      setProducts(fetched);
+    }
+    setLoadingProducts(false);
+  }, []);
+
+  const reportPurchase = useCallback(
+    async (purchase) => {
+      const productId = purchase?.productId;
+      if (!productId) return;
+      const purchaseToken = purchase?.purchaseToken || null;
+      const transactionId = purchase?.transactionId || purchase?.orderId || null;
+      const handledKey = purchaseToken || transactionId || productId;
+      if (handledTokensRef.current.has(handledKey)) return;
+      handledTokensRef.current.add(handledKey);
+      try {
+        const payload = await apiPost(serverUrl, "/api/payments/play", {
+          product_id: productId,
+          transaction_id: transactionId,
+          purchase_token: purchaseToken,
+        });
+        if (payload?.credits != null && onCreditsUpdate) {
+          onCreditsUpdate(payload.credits);
+        }
+        setStatus({ error: null, message: "Credits added to your account." });
+      } catch (error) {
+        handledTokensRef.current.delete(handledKey);
+        setStatus({
+          error: error?.message || "Purchase verification failed.",
+          message: null,
+        });
+      }
+    },
+    [onCreditsUpdate, serverUrl]
+  );
+
+  useEffect(() => {
+    if (!isPlayBuild) {
+      setStatus({
+        error: "Play Store billing is only available on the Play build.",
+        message: null,
+      });
+      return undefined;
+    }
+    if (typeof iapModule.purchaseUpdatedListener !== "function") {
+      setStatus({
+        error: "Billing module not available. Reinstall the Play build.",
+        message: null,
+      });
+      return undefined;
+    }
+
+    let mounted = true;
+    let purchaseSub = null;
+    let errorSub = null;
+
+    const init = async () => {
+      try {
+        if (typeof iapModule.initConnection === "function") {
+          await iapModule.initConnection();
+        }
+        if (!mounted) return;
+        setIapReady(true);
+        if (Platform.OS === "android" && iapModule.flushFailedPurchasesCachedAsPendingAndroid) {
+          await iapModule.flushFailedPurchasesCachedAsPendingAndroid();
+        }
+        await refreshProducts();
+      } catch (error) {
+        if (mounted) {
+          setStatus({
+            error: error?.message || "Billing connection failed.",
+            message: null,
+          });
+        }
+      }
+    };
+
+    init();
+
+    purchaseSub = iapModule.purchaseUpdatedListener(async (purchase) => {
+      await reportPurchase(purchase);
+      try {
+        if (iapModule.finishTransaction) {
+          await iapModule.finishTransaction({ purchase, isConsumable: true });
+        }
+      } catch (error) {
+        // ignore finish errors
+      } finally {
+        setBusyProduct(null);
+      }
+    });
+
+    if (typeof iapModule.purchaseErrorListener === "function") {
+      errorSub = iapModule.purchaseErrorListener((error) => {
+        setBusyProduct(null);
+        setStatus({
+          error: error?.message || "Purchase failed.",
+          message: null,
+        });
+      });
+    }
+
+    return () => {
+      mounted = false;
+      purchaseSub?.remove?.();
+      errorSub?.remove?.();
+      if (iapModule.endConnection) {
+        iapModule.endConnection();
+      }
+    };
+  }, [iapModule, refreshProducts, reportPurchase]);
+
+  const handleBuy = useCallback(
+    async (productId) => {
+      if (!iapReady) {
+        setStatus({ error: "Billing is still initializing.", message: null });
+        return;
+      }
+      setBusyProduct(productId);
+      setStatus({ error: null, message: null });
+      try {
+        await safeRequestPurchase(productId);
+      } catch (error) {
+        setBusyProduct(null);
+        setStatus({
+          error: error?.message || "Purchase failed to start.",
+          message: null,
+        });
+      }
+    },
+    [iapReady]
+  );
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Buy Credits</Text>
+        <Text style={styles.subtitle}>Google Play billing</Text>
+      </View>
+      {loadingProducts ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={colors.gold} />
+          <Text style={styles.loadingLabel}>Loading offers...</Text>
+        </View>
+      ) : null}
+      <View style={styles.list}>
+        {PLAY_PRODUCTS.map((item) => {
+          const product = productMap.get(item.id);
+          const price =
+            product?.localizedPrice ||
+            product?.price ||
+            product?.oneTimePurchaseOfferDetails?.formattedPrice ||
+            item.fallbackPrice;
+          return (
+            <View key={item.id} style={styles.card}>
+              <View style={styles.cardInfo}>
+                <Text style={styles.cardTitle}>{item.label}</Text>
+                <Text style={styles.cardMeta}>{price}</Text>
+              </View>
+              <Button
+                label={busyProduct === item.id ? "Processing" : "Buy"}
+                onPress={() => handleBuy(item.id)}
+                disabled={busyProduct != null}
+                style={styles.buyButton}
+              />
+            </View>
+          );
+        })}
+      </View>
+      {status.error ? <Text style={styles.error}>{status.error}</Text> : null}
+      {status.message ? <Text style={styles.success}>{status.message}</Text> : null}
+      {!isPlayBuild ? (
+        <Text style={styles.note}>Install the Play Store build to purchase credits.</Text>
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    paddingVertical: spacing.lg,
+  },
+  header: {
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  title: {
+    color: colors.parchment,
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  subtitle: {
+    color: colors.mutedGold,
+    fontSize: 12,
+  },
+  loading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  loadingLabel: {
+    color: colors.mutedGold,
+    fontSize: 12,
+  },
+  list: {
+    gap: spacing.md,
+  },
+  card: {
+    backgroundColor: colors.panelAlt,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+  },
+  cardInfo: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  cardTitle: {
+    color: colors.parchment,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  cardMeta: {
+    color: colors.mutedGold,
+    fontSize: 12,
+  },
+  buyButton: {
+    minWidth: 90,
+  },
+  error: {
+    marginTop: spacing.md,
+    color: colors.accent,
+    fontSize: 12,
+  },
+  success: {
+    marginTop: spacing.sm,
+    color: colors.success,
+    fontSize: 12,
+  },
+  note: {
+    marginTop: spacing.md,
+    color: colors.mutedGold,
+    fontSize: 12,
+  },
+});
