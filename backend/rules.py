@@ -29,6 +29,7 @@ class Character:
     appearance: Optional[str] = None
     race: Optional[str] = None
     background: Optional[str] = None
+    gender: Optional[str] = None
     alignment: Optional[str] = None
     traits: List[str] = field(default_factory=list)
     languages: List[str] = field(default_factory=list)

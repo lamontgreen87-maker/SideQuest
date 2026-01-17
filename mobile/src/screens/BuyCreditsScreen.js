@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Clipboard, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import * as RNIap from "react-native-iap";
 import Button from "../components/Button";
-import { apiPost } from "../api/client";
-import { colors, radius, spacing } from "../theme";
+import { FantasyCard } from "../components/FantasyCard";
+import { apiGet, apiPost } from "../api/client";
+import { theme } from "../theme";
 import { isPlayBuild } from "../buildConfig";
 
 const PLAY_PRODUCTS = [
@@ -57,7 +58,190 @@ async function safeRequestPurchase(productId) {
   }
 }
 
+// USDT Payment Screen for Amazon builds
+function USDTPaymentScreen({ serverUrl, onCreditsUpdate }) {
+  const [packs, setPacks] = useState([]);
+  const [wallet, setWallet] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState({ error: null, message: null });
+  const [selectedPack, setSelectedPack] = useState(null);
+  const [order, setOrder] = useState(null);
+  const pollIntervalRef = useRef(null);
+
+  useEffect(() => {
+    const fetchPacks = async () => {
+      try {
+        const data = await apiGet(serverUrl, "/api/payments/packs");
+        setPacks(data.packs || []);
+        setWallet(data.wallet || "");
+      } catch (error) {
+        setStatus({ error: error?.message || "Failed to load payment options.", message: null });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchPacks();
+  }, [serverUrl]);
+
+  const copyToClipboard = useCallback((text, label) => {
+    Clipboard.setString(text);
+    Alert.alert("Copied", `${label} copied to clipboard`);
+  }, []);
+
+  const createOrder = useCallback(
+    async (pack) => {
+      setSelectedPack(pack);
+      setStatus({ error: null, message: null });
+      try {
+        const response = await apiPost(serverUrl, "/api/payments/create", {
+          credits: pack.credits,
+        });
+        setOrder(response);
+        setStatus({ error: null, message: "Order created! Send USDT to the address below." });
+
+        // Start polling for payment
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+        }
+        pollIntervalRef.current = setInterval(async () => {
+          try {
+            const statusResponse = await apiGet(serverUrl, `/api/payments/status/${response.order_id}`);
+            if (statusResponse.status === "completed") {
+              clearInterval(pollIntervalRef.current);
+              if (statusResponse.credits != null && onCreditsUpdate) {
+                onCreditsUpdate(statusResponse.credits);
+              }
+              setStatus({ error: null, message: "Payment received! Credits added to your account." });
+              setOrder(null);
+              setSelectedPack(null);
+            } else if (statusResponse.status === "failed" || statusResponse.status === "expired") {
+              clearInterval(pollIntervalRef.current);
+              setStatus({ error: "Payment failed or expired.", message: null });
+              setOrder(null);
+              setSelectedPack(null);
+            }
+          } catch (error) {
+            // Continue polling on error
+          }
+        }, 5000);
+      } catch (error) {
+        setSelectedPack(null);
+        const errorMsg = error?.message || "Failed to create payment order.";
+        console.error("Payment creation error:", error);
+        setStatus({ error: errorMsg, message: null });
+      }
+    },
+    [serverUrl, onCreditsUpdate]
+  );
+
+  const cancelOrder = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+    setOrder(null);
+    setSelectedPack(null);
+    setStatus({ error: null, message: null });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  if (order) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Send USDT Payment</Text>
+          <Text style={styles.subtitle}>{selectedPack?.credits} Credits</Text>
+        </View>
+
+        <FantasyCard style={styles.paymentCard}>
+          <Text style={styles.label}>Send exactly this amount:</Text>
+          <TouchableOpacity
+            style={styles.copyField}
+            onPress={() => copyToClipboard(order.amount, "Amount")}
+          >
+            <Text style={styles.copyFieldText}>{order.amount} USDT</Text>
+            <Text style={styles.copyHint}>Tap to copy</Text>
+          </TouchableOpacity>
+
+          <Text style={[styles.label, { marginTop: theme.spacing.md }]}>To this address:</Text>
+          <TouchableOpacity
+            style={styles.copyField}
+            onPress={() => copyToClipboard(order.address, "Address")}
+          >
+            <Text style={styles.copyFieldText}>{order.address}</Text>
+            <Text style={styles.copyHint}>Tap to copy</Text>
+          </TouchableOpacity>
+
+          <View style={styles.warning}>
+            <Text style={styles.warningText}>⚠️ Send the EXACT amount shown above</Text>
+            <Text style={styles.warningText}>The unique amount helps us identify your payment</Text>
+          </View>
+        </FantasyCard>
+
+        <View style={styles.statusBox}>
+          <ActivityIndicator color={theme.colors.gold} />
+          <Text style={styles.statusText}>Waiting for payment...</Text>
+          <Text style={styles.statusSubtext}>This may take a few minutes</Text>
+        </View>
+
+        <Button label="Cancel" onPress={cancelOrder} variant="ghost" />
+        {status.error ? <Text style={styles.error}>{status.error}</Text> : null}
+        {status.message ? <Text style={styles.success}>{status.message}</Text> : null}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Buy Credits</Text>
+        <Text style={styles.subtitle}>Pay with USDT (Ethereum Mainnet)</Text>
+      </View>
+      {loading ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={theme.colors.gold} />
+          <Text style={styles.loadingLabel}>Loading offers...</Text>
+        </View>
+      ) : null}
+      <View style={styles.list}>
+        {packs.map((pack) => (
+          <FantasyCard key={pack.credits} style={styles.card}>
+            <View style={styles.cardInfo}>
+              <Text style={styles.cardTitle}>{pack.credits} Credits</Text>
+              <Text style={styles.cardMeta}>{pack.amount} USDT</Text>
+            </View>
+            <Button
+              label={selectedPack?.credits === pack.credits ? "Processing" : "Buy"}
+              onPress={() => createOrder(pack)}
+              disabled={selectedPack != null}
+              style={styles.buyButton}
+            />
+          </FantasyCard>
+        ))}
+      </View>
+      {status.error ? <Text style={styles.error}>{status.error}</Text> : null}
+      {status.message ? <Text style={styles.success}>{status.message}</Text> : null}
+      {wallet ? (
+        <Text style={styles.note}>Payments are monitored on the Ethereum Mainnet</Text>
+      ) : null}
+    </View>
+  );
+}
+
+// Main component that switches between Play Store IAP and USDT payments
 export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate }) {
+  // For Amazon builds, show USDT/WalletConnect payment UI
+  if (!isPlayBuild) {
+    return <USDTPaymentScreen serverUrl={serverUrl} onCreditsUpdate={onCreditsUpdate} />;
+  }
+
+  // For Play builds, show Google Play IAP
   const [iapReady, setIapReady] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [products, setProducts] = useState([]);
@@ -112,13 +296,6 @@ export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate }) {
   );
 
   useEffect(() => {
-    if (!isPlayBuild) {
-      setStatus({
-        error: "Play Store billing is only available on the Play build.",
-        message: null,
-      });
-      return undefined;
-    }
     if (typeof iapModule.purchaseUpdatedListener !== "function") {
       setStatus({
         error: "Billing module not available. Reinstall the Play build.",
@@ -216,7 +393,7 @@ export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate }) {
       </View>
       {loadingProducts ? (
         <View style={styles.loading}>
-          <ActivityIndicator color={colors.gold} />
+          <ActivityIndicator color={theme.colors.gold} />
           <Text style={styles.loadingLabel}>Loading offers...</Text>
         </View>
       ) : null}
@@ -229,7 +406,7 @@ export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate }) {
             product?.oneTimePurchaseOfferDetails?.formattedPrice ||
             item.fallbackPrice;
           return (
-            <View key={item.id} style={styles.card}>
+            <FantasyCard key={item.id} style={styles.card}>
               <View style={styles.cardInfo}>
                 <Text style={styles.cardTitle}>{item.label}</Text>
                 <Text style={styles.cardMeta}>{price}</Text>
@@ -240,15 +417,12 @@ export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate }) {
                 disabled={busyProduct != null}
                 style={styles.buyButton}
               />
-            </View>
+            </FantasyCard>
           );
         })}
       </View>
       {status.error ? <Text style={styles.error}>{status.error}</Text> : null}
       {status.message ? <Text style={styles.success}>{status.message}</Text> : null}
-      {!isPlayBuild ? (
-        <Text style={styles.note}>Install the Play Store build to purchase credits.</Text>
-      ) : null}
     </View>
   );
 }
@@ -256,74 +430,134 @@ export default function BuyCreditsScreen({ serverUrl, onCreditsUpdate }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingVertical: spacing.lg,
+    paddingVertical: theme.spacing.lg,
   },
   header: {
-    gap: spacing.xs,
-    marginBottom: spacing.md,
+    gap: theme.spacing.xs,
+    marginBottom: theme.spacing.md,
   },
   title: {
-    color: colors.parchment,
-    fontSize: 18,
-    fontWeight: "700",
+    color: theme.colors.gold,
+    fontSize: 24,
+    fontFamily: theme.fonts.header,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
   },
   subtitle: {
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
   },
   loading: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
   },
   loadingLabel: {
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     fontSize: 12,
   },
   list: {
-    gap: spacing.md,
+    gap: theme.spacing.md,
   },
   card: {
-    backgroundColor: colors.panelAlt,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.md,
+    padding: theme.spacing.md,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: spacing.md,
+    gap: theme.spacing.md,
   },
   cardInfo: {
     flex: 1,
-    gap: spacing.xs,
+    gap: theme.spacing.xs,
   },
   cardTitle: {
-    color: colors.parchment,
-    fontSize: 14,
+    color: theme.colors.textPrimary,
+    fontSize: 16,
     fontWeight: "700",
+    fontFamily: theme.fonts.header,
   },
   cardMeta: {
-    color: colors.mutedGold,
-    fontSize: 12,
+    color: theme.colors.textSecondary,
+    fontSize: 14,
+    fontFamily: theme.fonts.body,
   },
   buyButton: {
     minWidth: 90,
   },
+  paymentCard: {
+    padding: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+  },
+  label: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    marginBottom: theme.spacing.xs,
+    fontFamily: theme.fonts.body,
+    textTransform: 'uppercase',
+  },
+  copyField: {
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: theme.layout.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.goldDim,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
+  },
+  copyFieldText: {
+    color: theme.colors.gold,
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: theme.spacing.xs,
+    fontFamily: theme.fonts.body,
+  },
+  copyHint: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+  },
+  warning: {
+    backgroundColor: 'rgba(138, 28, 28, 0.15)', // Crimson tint
+    borderRadius: theme.layout.radius.sm,
+    padding: theme.spacing.md,
+    marginTop: theme.spacing.md,
+    gap: theme.spacing.xs,
+    borderWidth: 1,
+    borderColor: theme.colors.crimson,
+  },
+  warningText: {
+    color: theme.colors.crimsonBright,
+    fontSize: 11,
+    fontFamily: theme.fonts.body,
+  },
+  statusBox: {
+    alignItems: "center",
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.lg,
+  },
+  statusText: {
+    color: theme.colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  statusSubtext: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+  },
   error: {
-    marginTop: spacing.md,
-    color: colors.accent,
+    marginTop: theme.spacing.md,
+    color: theme.colors.crimson,
     fontSize: 12,
   },
   success: {
-    marginTop: spacing.sm,
-    color: colors.success,
+    marginTop: theme.spacing.sm,
+    color: theme.colors.emerald,
     fontSize: 12,
   },
   note: {
-    marginTop: spacing.md,
-    color: colors.mutedGold,
+    marginTop: theme.spacing.md,
+    color: theme.colors.textMuted,
     fontSize: 12,
   },
 });

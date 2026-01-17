@@ -26,7 +26,15 @@ spec:
             - name: MODEL_PATH
               value: "/models"
             - name: DATA_DIR
-              value: "/workspace"
+              value: "/models/data"
+            - name: PAYMENT_WALLET_ADDRESS
+              value: "0x062F50dD65caEC59AF85605a66f8287b22565F06"
+            - name: USDT_CONTRACT_ADDRESS
+              value: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+            - name: PAYMENT_CONFIRMATIONS
+              value: "1"
+            - name: PAYMENT_POLL_INTERVAL
+              value: "15"
           volumeMounts:
             - name: model-data
               mountPath: /models

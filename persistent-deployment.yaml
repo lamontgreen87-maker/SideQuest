@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dungeon-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-server
+  labels:
+    app: ai-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-server
+  template:
+    metadata:
+      labels:
+        app: ai-server
+    spec:
+      containers:
+        - name: ai-server
+          image: lamonster87/dungeoncrawler-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+            - containerPort: 11434
+          env:
+            - name: DATA_DIR
+              value: "/data"
+            - name: MODEL_PATH
+              value: "/models"
+            - name: PAYMENT_WALLET_ADDRESS
+              value: "0x062F50dD65caEC59AF85605a66f8287b22565F06"
+            - name: USDT_CONTRACT_ADDRESS
+              value: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+            - name: PAYMENT_CONFIRMATIONS
+              value: "1"
+            - name: PAYMENT_POLL_INTERVAL
+              value: "15"
+            - name: PRICE_PER_CREDIT_USDT
+              value: "0.005"
+            - name: PRICE_TABLE_JSON
+              value: '{"200": "1.00", "1000": "5.00", "5000": "25.00"}'
+            - name: STARTING_CREDITS
+              value: "100"
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+            # Optional: Separate volume for heavy models if needed, or share the same one
+            # - name: data-volume
+            #   mountPath: /models
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: dungeon-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-server
+spec:
+  selector:
+    app: ai-server
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+    - protocol: TCP
+      port: 11434
+      targetPort: 11434
+  type: ClusterIP

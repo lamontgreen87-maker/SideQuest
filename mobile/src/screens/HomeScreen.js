@@ -1,7 +1,7 @@
 import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Screen from "../components/Screen";
-import { colors, radius, spacing } from "../theme";
+import { theme } from "../theme";
 
 export default function HomeScreen({
   tabs,
@@ -96,8 +96,8 @@ export default function HomeScreen({
 
 const styles = StyleSheet.create({
   header: {
-    padding: spacing.lg,
-    paddingBottom: spacing.sm,
+    padding: theme.spacing.lg,
+    paddingBottom: theme.spacing.sm,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -105,119 +105,131 @@ const styles = StyleSheet.create({
   statusRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
   },
   headerIcons: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: theme.spacing.sm,
   },
   statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 8,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   statusOnline: {
-    backgroundColor: colors.success,
+    backgroundColor: theme.colors.emerald,
+    shadowColor: theme.colors.emerald,
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
   },
   statusOffline: {
-    backgroundColor: colors.accent,
+    backgroundColor: theme.colors.crimson,
   },
   statusText: {
-    color: colors.mutedGold,
+    color: theme.colors.textMuted,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
   },
   credit: {
     paddingHorizontal: 4,
   },
   iconButton: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    backgroundColor: theme.colors.surface,
   },
   iconLabel: {
-    fontSize: 16,
+    fontSize: 14,
+    color: theme.colors.textSecondary,
   },
   title: {
-    color: colors.parchment,
-    fontSize: 20,
-    fontWeight: "700",
-    letterSpacing: 1,
+    color: theme.colors.gold,
+    fontSize: 22,
+    fontFamily: theme.fonts.header,
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
   },
   actions: {
     flexDirection: "row",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
   },
   action: {
     flex: 1,
     minWidth: 100,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.layout.radius.sm,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: theme.colors.border,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: theme.colors.surface,
   },
   actionPrimary: {
-    backgroundColor: colors.gold,
-    borderColor: colors.gold,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderColor: theme.colors.goldDim,
   },
   actionGhost: {
     backgroundColor: "transparent",
   },
   actionLabel: {
-    color: colors.parchment,
+    color: theme.colors.textPrimary,
     fontSize: 12,
     letterSpacing: 1,
     textTransform: "uppercase",
+    fontFamily: theme.fonts.button,
   },
   actionPressed: {
-    opacity: 0.65,
+    opacity: 0.7,
   },
   tabScroll: {
-    maxHeight: 56,
-    marginBottom: spacing.sm,
+    maxHeight: 50,
+    marginBottom: theme.spacing.sm,
   },
   tabBar: {
-    paddingHorizontal: spacing.lg,
-    gap: spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    gap: theme.spacing.sm,
     alignItems: "center",
   },
   tab: {
     borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    maxWidth: 140,
-    minHeight: 36,
+    borderColor: 'transparent',
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: theme.layout.radius.sm, // Less rounded, more rune-stone like
+    minHeight: 32,
     justifyContent: "center",
     alignItems: "center",
   },
   tabActive: {
-    backgroundColor: colors.gold,
-    borderColor: colors.gold,
+    backgroundColor: 'rgba(197, 160, 89, 0.15)', // Gold with low opacity
+    borderColor: theme.colors.goldDim,
   },
   tabText: {
-    color: colors.mutedGold,
-    fontSize: 10,
-    lineHeight: 12,
-    letterSpacing: 0.5,
+    color: theme.colors.textMuted,
+    fontSize: 12,
+    letterSpacing: 1,
     textTransform: "uppercase",
+    fontFamily: theme.fonts.body,
   },
   tabTextActive: {
-    color: colors.ink,
+    color: theme.colors.gold,
+    fontFamily: theme.fonts.header, // Cinzel for active tab
+    fontWeight: 'bold',
   },
   body: {
     flex: 1,
     flexGrow: 1,
     minHeight: 0,
-    padding: spacing.lg,
+    padding: theme.spacing.lg,
+    // No background here, PageContainer handles it
   },
 });

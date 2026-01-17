@@ -93,7 +93,21 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "0.1.5"
-        missingDimensionStrategy 'store', 'play'
+    }
+    
+    flavorDimensions "distribution"
+    productFlavors {
+        play {
+            dimension "distribution"
+            applicationIdSuffix ".play"
+            buildConfigField "boolean", "IS_PLAY", "true"
+            missingDimensionStrategy 'store', 'play'
+        }
+        amazon {
+            dimension "distribution"
+            buildConfigField "boolean", "IS_PLAY", "false"
+            missingDimensionStrategy 'store', 'amazon'
+        }
     }
     signingConfigs {
         debug {

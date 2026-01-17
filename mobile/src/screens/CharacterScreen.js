@@ -9,10 +9,11 @@ import {
   TextInput,
   View,
 } from "react-native";
+
 import Button from "../components/Button";
 import Section from "../components/Section";
 import { apiGet, apiPost } from "../api/client";
-import { colors, radius, spacing } from "../theme";
+import { theme } from "../theme";
 import { DEFAULT_SPELLS, DND_WEAPONS } from "../data/dnd";
 
 const CLASSES = [
@@ -134,6 +135,7 @@ export default function CharacterScreen({
   const createInFlightRef = useRef(false);
 
   const [formName, setFormName] = useState("");
+  const [formGender, setFormGender] = useState(GENDERS[0]);
   const [formLevel, setFormLevel] = useState("1");
   const [formClass, setFormClass] = useState(CLASSES[0]);
   const [formRace, setFormRace] = useState(RACES[0]);
@@ -245,6 +247,48 @@ export default function CharacterScreen({
     );
   }, []);
 
+  const optimizeStats = useCallback(() => {
+    // Standard Array
+    const standard = ["15", "14", "13", "12", "10", "8"];
+    // Priority Map: High to Low
+    const priorities = {
+      Barbarian: ["str", "con", "dex", "wis", "int", "cha"],
+      Bard: ["cha", "dex", "con", "wis", "int", "str"],
+      Cleric: ["wis", "con", "str", "cha", "int", "dex"],
+      Druid: ["wis", "con", "dex", "int", "cha", "str"],
+      Fighter: ["str", "con", "dex", "wis", "int", "cha"], // Strength based default
+      Monk: ["dex", "wis", "con", "str", "int", "cha"],
+      Paladin: ["str", "cha", "con", "wis", "dex", "int"],
+      Ranger: ["dex", "wis", "con", "int", "str", "cha"],
+      Rogue: ["dex", "cha", "int", "con", "wis", "str"],
+      Sorcerer: ["cha", "con", "dex", "wis", "int", "str"],
+      Warlock: ["cha", "con", "dex", "wis", "int", "str"],
+      Wizard: ["int", "con", "dex", "wis", "cha", "str"],
+    };
+
+    const order = priorities[formClass] || priorities.Fighter;
+    const newStats = { ...DEFAULT_STATS };
+
+    order.forEach((stat, index) => {
+      newStats[stat] = standard[index] || "10";
+    });
+    setFormStats(newStats);
+  }, [formClass]);
+
+  const rollStats = useCallback(() => {
+    const roll4d6drop1 = () => {
+      const rolls = Array.from({ length: 4 }, () => Math.floor(Math.random() * 6) + 1);
+      rolls.sort((a, b) => a - b);
+      return rolls.slice(1).reduce((a, b) => a + b, 0);
+    };
+
+    const newStats = { ...DEFAULT_STATS };
+    Object.keys(newStats).forEach((key) => {
+      newStats[key] = String(roll4d6drop1());
+    });
+    setFormStats(newStats);
+  }, []);
+
   const levelValue = Math.max(1, Number(formLevel) || 1);
   const proficiencyBonus = 2 + Math.floor((levelValue - 1) / 4);
 
@@ -332,6 +376,7 @@ export default function CharacterScreen({
         formName.trim() || `Adventurer ${Math.floor(Math.random() * 999)}`;
       const response = await apiPost(serverUrl, "/api/characters", {
         name: resolvedName,
+        gender: formGender,
         klass: formClass,
         level: levelValue,
         stats: statsPayload,
@@ -360,6 +405,7 @@ export default function CharacterScreen({
         alert(`Your character's backstory:\n\n${response.backstory}`);
       }
       setFormName("");
+      setFormGender(GENDERS[0]);
       setFormLevel("1");
       setFormClass(CLASSES[0]);
       setFormRace(RACES[0]);
@@ -384,6 +430,7 @@ export default function CharacterScreen({
         requestId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         id: response?.character_id || null,
         name: resolvedName,
+        gender: formGender,
         klass: formClass,
         level: levelValue,
         stats: statsPayload,
@@ -414,6 +461,7 @@ export default function CharacterScreen({
   }, [
     createBusy,
     formName,
+    formGender,
     formClass,
     formLevel,
     formStats,
@@ -446,8 +494,9 @@ export default function CharacterScreen({
           value={formName}
           onChangeText={setFormName}
           placeholder="Character Name"
-          placeholderTextColor={colors.mutedGold}
+          placeholderTextColor={theme.colors.textSecondary}
         />
+<<<<<<< HEAD
         <View style={styles.infoRow}>
           <TextInput
             style={[styles.formInput, styles.smallInput]}
@@ -474,12 +523,73 @@ export default function CharacterScreen({
                 ]}
               >
                 <Text style={styles.selectorText}>{klass}</Text>
+=======
+        <View style={styles.selectorGroup}>
+          <View style={styles.selectorRow}>
+            {GENDERS.map((gender) => (
+              <Pressable
+                key={gender}
+                onPress={() => setFormGender(gender)}
+                style={[
+                  styles.selector,
+                  formGender === gender && styles.selectorActive,
+                ]}
+              >
+                <Text style={styles.selectorText}>{gender}</Text>
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
+              </Pressable>
+            ))}
+          </View>
+        </View>
+<<<<<<< HEAD
+        <View style={styles.selectorGroup}>
+          <View style={styles.selectorRow}>
+            {RACES.map((race) => (
+              <Pressable
+                key={race}
+                onPress={() => setFormRace(race)}
+                style={[
+                  styles.selector,
+                  formRace === race && styles.selectorActive,
+                ]}
+              >
+                <Text style={styles.selectorText}>{race}</Text>
+=======
+        <View style={styles.infoRow}>
+          <TextInput
+            style={[styles.formInput, styles.smallInput]}
+            value={formLevel}
+            onChangeText={(value) => setFormLevel(value.replace(/[^0-9]/g, ""))}
+            placeholder="Level"
+            placeholderTextColor={theme.colors.textSecondary}
+            keyboardType="numeric"
+          />
+          <View style={styles.proficiencyCard}>
+            <Text style={styles.statLabelSmall}>Proficiency</Text>
+            <Text style={styles.statValue}>+{proficiencyBonus}</Text>
+          </View>
+        </View>
+        <View style={styles.selectorGroup}>
+          <View style={styles.selectorRow}>
+            {CLASSES.map((klass) => (
+              <Pressable
+                key={klass}
+                onPress={() => setFormClass(klass)}
+                style={[
+                  styles.selector,
+                  formClass === klass && styles.selectorActive,
+                ]}
+              >
+                <Text style={styles.selectorText}>{klass}</Text>
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
               </Pressable>
             ))}
           </View>
         </View>
         <View style={styles.selectorGroup}>
           <View style={styles.selectorRow}>
+<<<<<<< HEAD
+=======
             {RACES.map((race) => (
               <Pressable
                 key={race}
@@ -496,6 +606,7 @@ export default function CharacterScreen({
         </View>
         <View style={styles.selectorGroup}>
           <View style={styles.selectorRow}>
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
             {BACKGROUNDS.map((background) => (
               <Pressable
                 key={background}
@@ -529,6 +640,17 @@ export default function CharacterScreen({
             ))}
           </View>
         </View>
+<<<<<<< HEAD
+=======
+        <View style={styles.statActions}>
+          <Pressable style={styles.actionButton} onPress={optimizeStats}>
+            <Text style={styles.actionButtonText}>🚀 Optimize for Class</Text>
+          </Pressable>
+          <Pressable style={styles.actionButton} onPress={rollStats}>
+            <Text style={styles.actionButtonText}>🎲 Roll Stats (4d6)</Text>
+          </Pressable>
+        </View>
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
         <View style={styles.statGrid}>
           {Object.entries(formStats).map(([key, value]) => {
             const score = Number(value) || 10;
@@ -618,7 +740,11 @@ export default function CharacterScreen({
           value={formSpellcastingAbility}
           onChangeText={setFormSpellcastingAbility}
           placeholder="Spellcasting ability (e.g. wis)"
+<<<<<<< HEAD
           placeholderTextColor={colors.mutedGold}
+=======
+          placeholderTextColor={theme.colors.textSecondary}
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
         />
         {classCantrips.length ? (
           <View style={styles.spellGroup}>
@@ -691,7 +817,11 @@ export default function CharacterScreen({
           value={formItems}
           onChangeText={setFormItems}
           placeholder="Inventory / Items"
+<<<<<<< HEAD
           placeholderTextColor={colors.mutedGold}
+=======
+          placeholderTextColor={theme.colors.textSecondary}
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
           multiline
         />
         <TextInput
@@ -699,7 +829,11 @@ export default function CharacterScreen({
           value={formTraits}
           onChangeText={setFormTraits}
           placeholder="Traits / Feats"
+<<<<<<< HEAD
           placeholderTextColor={colors.mutedGold}
+=======
+          placeholderTextColor={theme.colors.textSecondary}
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
           multiline
         />
         <TextInput
@@ -707,6 +841,7 @@ export default function CharacterScreen({
           value={formLanguages}
           onChangeText={setFormLanguages}
           placeholder="Languages"
+<<<<<<< HEAD
           placeholderTextColor={colors.mutedGold}
           multiline
         />
@@ -736,6 +871,11 @@ export default function CharacterScreen({
           multiline
           numberOfLines={4}
         />
+=======
+          placeholderTextColor={theme.colors.textSecondary}
+          multiline
+        />
+>>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
         <Button
           label={createBusy ? "..." : "Create Character"}
           onPress={handleCreateCharacter}
@@ -767,9 +907,9 @@ export default function CharacterScreen({
 
 const styles = StyleSheet.create({
   content: {
-    gap: spacing.lg,
-    paddingVertical: spacing.lg,
-    paddingBottom: spacing.xl,
+    gap: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
   },
   scrollArea: {
     flex: 1,
@@ -777,13 +917,15 @@ const styles = StyleSheet.create({
   },
   formInput: {
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    color: colors.parchment,
-    backgroundColor: colors.panel,
-    marginBottom: spacing.sm,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    color: theme.colors.textPrimary,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    marginBottom: theme.spacing.sm,
+    fontFamily: theme.fonts.body,
+    fontSize: 16,
   },
   multilineInput: {
     minHeight: 60,
@@ -794,183 +936,221 @@ const styles = StyleSheet.create({
   },
   infoRow: {
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: theme.spacing.sm,
   },
   selectorRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.xs,
-    rowGap: spacing.xs,
-    columnGap: spacing.xs,
-    marginBottom: spacing.xs,
+    gap: theme.spacing.xs,
+    rowGap: theme.spacing.xs,
+    columnGap: theme.spacing.xs,
+    marginBottom: theme.spacing.xs,
     width: "100%",
     alignItems: "flex-start",
     alignContent: "flex-start",
   },
   selectorGroup: {
-    marginBottom: spacing.md,
+    marginBottom: theme.spacing.md,
   },
   selector: {
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
+    minHeight: 32,
+    justifyContent: 'center',
   },
   alignmentGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
-    gap: spacing.xs,
+    gap: theme.spacing.xs,
   },
   alignmentButton: {
     width: "30.5%",
     aspectRatio: 1,
-    borderRadius: radius.md,
+    borderRadius: theme.layout.radius.sm,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: spacing.xs,
+    paddingHorizontal: theme.spacing.xs,
   },
   alignmentText: {
     textAlign: "center",
     fontSize: 10,
+    fontFamily: theme.fonts.body,
   },
   selectorActive: {
-    backgroundColor: colors.gold,
-    borderColor: colors.gold,
+    backgroundColor: 'rgba(197, 160, 89, 0.15)',
+    borderColor: theme.colors.gold,
   },
   selectorText: {
-    color: colors.parchment,
+    color: theme.colors.textMuted,
     letterSpacing: 1,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
+    textTransform: 'uppercase',
   },
   spellRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
     justifyContent: "space-between",
   },
   spellGroup: {
-    gap: spacing.xs,
+    gap: theme.spacing.xs,
   },
   spellButton: {
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    backgroundColor: colors.panel,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    backgroundColor: theme.colors.surface,
     flexBasis: "48%",
     maxWidth: "48%",
   },
   spellButtonActive: {
-    borderColor: colors.gold,
-    backgroundColor: colors.panelAlt,
+    borderColor: theme.colors.gold,
+    backgroundColor: 'rgba(197, 160, 89, 0.15)',
   },
   spellMeta: {
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     fontSize: 10,
     letterSpacing: 1,
-    marginTop: spacing.xs,
+    marginTop: theme.spacing.xs,
+    fontFamily: theme.fonts.body,
   },
   spellButtonText: {
-    color: colors.mutedGold,
+    color: theme.colors.textMuted,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
   },
   spellButtonTextActive: {
-    color: colors.parchment,
+    color: theme.colors.gold,
+    fontWeight: 'bold',
+  },
+  statActions: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  actionButton: {
+    flex: 1,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: theme.layout.radius.sm,
+    alignItems: "center",
+  },
+  actionButtonText: {
+    color: theme.colors.textPrimary,
+    fontSize: 14,
+    fontFamily: theme.fonts.button,
+    letterSpacing: 1,
   },
   statGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
   },
   statBlock: {
     width: "30%",
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    padding: spacing.sm,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    padding: theme.spacing.sm,
     alignItems: "center",
-    backgroundColor: colors.panel,
+    backgroundColor: theme.colors.surface,
   },
   statLabelSmall: {
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     fontSize: 10,
     letterSpacing: 1,
     textTransform: "uppercase",
-    marginBottom: spacing.xs,
+    marginBottom: theme.spacing.xs,
+    fontFamily: theme.fonts.body,
   },
   statInput: {
     width: "100%",
     textAlign: "center",
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    color: colors.parchment,
-    fontSize: 14,
-    marginBottom: spacing.xs,
+    borderBottomColor: theme.colors.border,
+    color: theme.colors.gold,
+    fontSize: 16,
+    marginBottom: theme.spacing.xs,
+    fontFamily: theme.fonts.header,
+    fontWeight: 'bold',
   },
   statMod: {
-    color: colors.gold,
+    color: theme.colors.goldDim,
     fontSize: 12,
-    fontWeight: "700",
+    fontFamily: theme.fonts.body,
   },
   proficiencyCard: {
     flex: 1,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    backgroundColor: colors.panel,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    padding: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
     justifyContent: "center",
   },
   statValue: {
-    color: colors.parchment,
-    fontSize: 16,
+    color: theme.colors.gold,
+    fontSize: 18,
+    fontFamily: theme.fonts.header,
     fontWeight: "700",
   },
   sectionLabel: {
-    marginBottom: spacing.sm,
+    marginBottom: theme.spacing.sm,
     fontSize: 12,
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     letterSpacing: 1,
     textTransform: "uppercase",
+    fontFamily: theme.fonts.body,
   },
   formError: {
-    color: colors.accent,
+    color: theme.colors.crimson,
     fontSize: 12,
-    marginBottom: spacing.sm,
+    marginBottom: theme.spacing.sm,
+    fontFamily: theme.fonts.body,
   },
   weaponRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.sm,
+    gap: theme.spacing.sm,
     justifyContent: "space-between",
   },
   weaponCard: {
     flexBasis: "48%",
     minWidth: 140,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    backgroundColor: colors.panel,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    padding: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
   },
   weaponCardActive: {
-    borderColor: colors.gold,
-    backgroundColor: colors.panelAlt,
+    borderColor: theme.colors.gold,
+    backgroundColor: 'rgba(197, 160, 89, 0.15)',
   },
   weaponName: {
-    color: colors.parchment,
+    color: theme.colors.textPrimary,
     fontSize: 14,
+    fontFamily: theme.fonts.body,
     fontWeight: "600",
-    marginBottom: spacing.xs,
+    marginBottom: theme.spacing.xs,
   },
   weaponMeta: {
-    color: colors.mutedGold,
+    color: theme.colors.textSecondary,
     fontSize: 10,
+    fontFamily: theme.fonts.body,
   },
   backstoryInput: {
     minHeight: 100,

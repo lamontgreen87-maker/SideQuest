@@ -1,23 +1,10 @@
 import React from "react";
-import { SafeAreaView, StatusBar, StyleSheet, View } from "react-native";
-import { colors } from "../theme";
+import { PageContainer } from "./PageContainer";
 
 export default function Screen({ children, style }) {
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" />
-      <View style={[styles.container, style]}>{children}</View>
-    </SafeAreaView>
+    <PageContainer style={style}>
+      {children}
+    </PageContainer>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: colors.ink,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: colors.ink,
-  },
-});

@@ -1,8 +1,8 @@
 import React from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
-import { colors, radius, spacing } from "../theme";
+import { theme } from "../theme";
 
-export default function Field({ label, value, onChangeText, placeholder }) {
+export default function Field({ label, value, onChangeText, placeholder, ...props }) {
   return (
     <View style={styles.wrapper}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
@@ -10,10 +10,9 @@ export default function Field({ label, value, onChangeText, placeholder }) {
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={colors.mutedGold}
+        placeholderTextColor={theme.colors.textMuted}
         style={styles.input}
-        autoCapitalize="none"
-        autoCorrect={false}
+        {...props}
       />
     </View>
   );
@@ -21,21 +20,25 @@ export default function Field({ label, value, onChangeText, placeholder }) {
 
 const styles = StyleSheet.create({
   wrapper: {
-    marginBottom: spacing.md,
+    marginBottom: theme.spacing.md,
   },
   label: {
-    color: colors.mutedGold,
+    color: theme.colors.gold,
     fontSize: 12,
+    fontFamily: theme.fonts.body,
     letterSpacing: 1,
-    marginBottom: spacing.xs,
+    marginBottom: theme.spacing.xs,
+    textTransform: 'uppercase',
   },
   input: {
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    color: colors.parchment,
-    backgroundColor: colors.panel,
+    borderColor: theme.colors.border,
+    borderRadius: theme.layout.radius.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    color: theme.colors.textPrimary,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)', // Darker translucent background
+    fontFamily: theme.fonts.body,
+    fontSize: 16,
   },
 });
