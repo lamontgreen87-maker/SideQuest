@@ -4,8 +4,13 @@ FROM ollama/ollama
 # Install Python and pip for our FastAPI server
 RUN apt-get update && apt-get install -y python3 python3-pip curl dos2unix && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
-WORKDIR /app
+# Set default environment variables
+ENV MODEL_NAME="qwen3:4b"
+ENV MODEL_FALLBACK="qwen3:8b"
+ENV MODEL_HEAVY="qwen3:8b"
+ENV MODEL_CLERK="qwen2.5:1.5b"
+ENV DATA_DIR="/app/backend/data"
+ENV OLLAMA_TIMEOUT_SECONDS="900"
 
 # Copy backend requirements and install them
 COPY backend/requirements.txt ./
@@ -29,8 +34,8 @@ RUN printf "#!/bin/sh\n\
     sleep 5\n\
     \n\
     # Pull required models\n\
-    ollama pull qwen2.5:7b || true\n\
-    ollama pull qwen2.5:3b || true\n\
+    ollama pull qwen3:8b || true\n\
+    ollama pull qwen3:4b || true\n\
     ollama pull qwen2.5:1.5b || true\n\
     \n\
     # Wait for Ollama to be fully ready\n\

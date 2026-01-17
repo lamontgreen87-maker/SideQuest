@@ -66,6 +66,8 @@ const ALIGNMENTS = [
   "Chaotic Evil",
 ];
 
+const GENDERS = ["Male", "Female", "Other"];
+
 const SKILLS = [
   "acrobatics",
   "animal handling",
@@ -137,6 +139,8 @@ export default function CharacterScreen({
   const [formRace, setFormRace] = useState(RACES[0]);
   const [formBackground, setFormBackground] = useState(BACKGROUNDS[0]);
   const [formAlignment, setFormAlignment] = useState(ALIGNMENTS[0]);
+  const [formGender, setFormGender] = useState("Male");
+  const [formBackstory, setFormBackstory] = useState("");
   const [formStats, setFormStats] = useState(() => ({ ...DEFAULT_STATS }));
   const [formArmorClass, setFormArmorClass] = useState("10");
   const [formMaxHp, setFormMaxHp] = useState("10");
@@ -337,6 +341,8 @@ export default function CharacterScreen({
         race: formRace,
         background: formBackground,
         alignment: formAlignment,
+        gender: formGender,
+        backstory: formBackstory,
         traits: parseList(formTraits),
         languages: parseList(formLanguages),
         items: parseList(formItems),
@@ -348,12 +354,19 @@ export default function CharacterScreen({
         save_proficiencies: formSaveProficiencies,
         skill_proficiencies: formSkillProficiencies,
       });
+
+      // Show generated backstory if one was created
+      if (response?.backstory) {
+        alert(`Your character's backstory:\n\n${response.backstory}`);
+      }
       setFormName("");
       setFormLevel("1");
       setFormClass(CLASSES[0]);
       setFormRace(RACES[0]);
       setFormBackground(BACKGROUNDS[0]);
       setFormAlignment(ALIGNMENTS[0]);
+      setFormGender("Male");
+      setFormBackstory("");
       setFormStats({ ...DEFAULT_STATS });
       setFormArmorClass("10");
       setFormMaxHp("10");
@@ -409,6 +422,8 @@ export default function CharacterScreen({
     formRace,
     formBackground,
     formAlignment,
+    formGender,
+    formBackstory,
     formSpellcastingAbility,
     formItems,
     formTraits,
@@ -433,273 +448,299 @@ export default function CharacterScreen({
           placeholder="Character Name"
           placeholderTextColor={colors.mutedGold}
         />
-          <View style={styles.infoRow}>
-            <TextInput
-              style={[styles.formInput, styles.smallInput]}
-              value={formLevel}
-              onChangeText={(value) => setFormLevel(value.replace(/[^0-9]/g, ""))}
-              placeholder="Level"
-              placeholderTextColor={colors.mutedGold}
-              keyboardType="numeric"
-            />
-            <View style={styles.proficiencyCard}>
-              <Text style={styles.statLabelSmall}>Proficiency</Text>
-              <Text style={styles.statValue}>+{proficiencyBonus}</Text>
-            </View>
+        <View style={styles.infoRow}>
+          <TextInput
+            style={[styles.formInput, styles.smallInput]}
+            value={formLevel}
+            onChangeText={(value) => setFormLevel(value.replace(/[^0-9]/g, ""))}
+            placeholder="Level"
+            placeholderTextColor={colors.mutedGold}
+            keyboardType="numeric"
+          />
+          <View style={styles.proficiencyCard}>
+            <Text style={styles.statLabelSmall}>Proficiency</Text>
+            <Text style={styles.statValue}>+{proficiencyBonus}</Text>
           </View>
-          <View style={styles.selectorGroup}>
-            <View style={styles.selectorRow}>
-              {CLASSES.map((klass) => (
-                <Pressable
-                  key={klass}
-                  onPress={() => setFormClass(klass)}
-                  style={[
-                    styles.selector,
-                    formClass === klass && styles.selectorActive,
-                  ]}
-                >
-                  <Text style={styles.selectorText}>{klass}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-          <View style={styles.selectorGroup}>
-            <View style={styles.selectorRow}>
-              {RACES.map((race) => (
-                <Pressable
-                  key={race}
-                  onPress={() => setFormRace(race)}
-                  style={[
-                    styles.selector,
-                    formRace === race && styles.selectorActive,
-                  ]}
-                >
-                  <Text style={styles.selectorText}>{race}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-          <View style={styles.selectorGroup}>
-            <View style={styles.selectorRow}>
-              {BACKGROUNDS.map((background) => (
-                <Pressable
-                  key={background}
-                  onPress={() => setFormBackground(background)}
-                  style={[
-                    styles.selector,
-                    formBackground === background && styles.selectorActive,
-                  ]}
-                >
-                  <Text style={styles.selectorText}>{background}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-          <View style={styles.selectorGroup}>
-            <View style={styles.alignmentGrid}>
-              {ALIGNMENTS.map((alignment) => (
-                <Pressable
-                  key={alignment}
-                  onPress={() => setFormAlignment(alignment)}
-                  style={[
-                    styles.selector,
-                    styles.alignmentButton,
-                    formAlignment === alignment && styles.selectorActive,
-                  ]}
-                >
-                  <Text style={[styles.selectorText, styles.alignmentText]}>
-                    {alignment}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-          <View style={styles.statGrid}>
-            {Object.entries(formStats).map(([key, value]) => {
-              const score = Number(value) || 10;
-              return (
-                <View key={key} style={styles.statBlock}>
-                  <Text style={styles.statLabelSmall}>{key.toUpperCase()}</Text>
-                  <TextInput
-                    style={styles.statInput}
-                    value={String(score)}
-                    onChangeText={(next) => handleStatChange(key, next)}
-                    keyboardType="numeric"
-                  />
-                  <Text style={styles.statMod}>{formatModifier(abilityMod(score))}</Text>
-                </View>
-              );
-            })}
-          </View>
-          <Text style={[styles.statLabelSmall, styles.sectionLabel]}>Weapons</Text>
-          {formError ? <Text style={styles.formError}>{formError}</Text> : null}
-          <View style={styles.weaponRow}>
-            {availableWeapons.map((weapon) => {
-              const isActive = selectedWeapons.includes(weapon.id);
-              const score = Number(formStats[weapon.attack_ability]) || 10;
-              return (
-                <Pressable
-                  key={weapon.id}
-                  onPress={() => toggleWeapon(weapon.id)}
-                  style={[
-                    styles.weaponCard,
-                    isActive && styles.weaponCardActive,
-                  ]}
-                >
-                  <Text style={styles.weaponName}>{weapon.name}</Text>
-                  <Text style={styles.weaponMeta}>
-                    {weapon.attack_ability.toUpperCase()} Aú{" "}
-                    {weapon.damage_type}
-                  </Text>
-                  <Text style={styles.weaponMeta}>
-                    {weapon.damage.split("+")[0]}
-                    {abilityMod(score) >= 0
-                      ? `+${abilityMod(score)}`
-                      : abilityMod(score)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
-            Save Proficiencies
-          </Text>
+        </View>
+        <View style={styles.selectorGroup}>
           <View style={styles.selectorRow}>
-            {Object.keys(formStats).map((ability) => (
+            {CLASSES.map((klass) => (
               <Pressable
-                key={ability}
-                onPress={() => toggleSaveProficiency(ability)}
+                key={klass}
+                onPress={() => setFormClass(klass)}
                 style={[
                   styles.selector,
-                  formSaveProficiencies.includes(ability) && styles.selectorActive,
+                  formClass === klass && styles.selectorActive,
                 ]}
               >
-                <Text style={styles.selectorText}>{ability.toUpperCase()}</Text>
+                <Text style={styles.selectorText}>{klass}</Text>
               </Pressable>
             ))}
           </View>
-          <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
-            Skill Proficiencies
-          </Text>
+        </View>
+        <View style={styles.selectorGroup}>
           <View style={styles.selectorRow}>
-            {SKILLS.map((skill) => (
+            {RACES.map((race) => (
               <Pressable
-                key={skill}
-                onPress={() => toggleSkillProficiency(skill)}
+                key={race}
+                onPress={() => setFormRace(race)}
                 style={[
                   styles.selector,
-                  formSkillProficiencies.includes(skill) && styles.selectorActive,
+                  formRace === race && styles.selectorActive,
                 ]}
               >
-                <Text style={styles.selectorText}>{skill}</Text>
+                <Text style={styles.selectorText}>{race}</Text>
               </Pressable>
             ))}
           </View>
-          <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
-            Spellcasting
-          </Text>
-          <TextInput
-            style={styles.formInput}
-            value={formSpellcastingAbility}
-            onChangeText={setFormSpellcastingAbility}
-            placeholder="Spellcasting ability (e.g. wis)"
-            placeholderTextColor={colors.mutedGold}
-          />
-          {classCantrips.length ? (
-            <View style={styles.spellGroup}>
-              <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
-                Cantrips
-              </Text>
-              <View style={styles.spellRow}>
-                {classCantrips.map((spell) => {
-                  const selected = selectedCantrips.includes(spell.id);
-                  return (
-                    <Pressable
-                      key={spell.id}
-                      onPress={() => toggleSpellSelection(spell)}
+        </View>
+        <View style={styles.selectorGroup}>
+          <View style={styles.selectorRow}>
+            {BACKGROUNDS.map((background) => (
+              <Pressable
+                key={background}
+                onPress={() => setFormBackground(background)}
+                style={[
+                  styles.selector,
+                  formBackground === background && styles.selectorActive,
+                ]}
+              >
+                <Text style={styles.selectorText}>{background}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+        <View style={styles.selectorGroup}>
+          <View style={styles.alignmentGrid}>
+            {ALIGNMENTS.map((alignment) => (
+              <Pressable
+                key={alignment}
+                onPress={() => setFormAlignment(alignment)}
+                style={[
+                  styles.selector,
+                  styles.alignmentButton,
+                  formAlignment === alignment && styles.selectorActive,
+                ]}
+              >
+                <Text style={[styles.selectorText, styles.alignmentText]}>
+                  {alignment}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+        <View style={styles.statGrid}>
+          {Object.entries(formStats).map(([key, value]) => {
+            const score = Number(value) || 10;
+            return (
+              <View key={key} style={styles.statBlock}>
+                <Text style={styles.statLabelSmall}>{key.toUpperCase()}</Text>
+                <TextInput
+                  style={styles.statInput}
+                  value={String(score)}
+                  onChangeText={(next) => handleStatChange(key, next)}
+                  keyboardType="numeric"
+                />
+                <Text style={styles.statMod}>{formatModifier(abilityMod(score))}</Text>
+              </View>
+            );
+          })}
+        </View>
+        <Text style={[styles.statLabelSmall, styles.sectionLabel]}>Weapons</Text>
+        {formError ? <Text style={styles.formError}>{formError}</Text> : null}
+        <View style={styles.weaponRow}>
+          {availableWeapons.map((weapon) => {
+            const isActive = selectedWeapons.includes(weapon.id);
+            const score = Number(formStats[weapon.attack_ability]) || 10;
+            return (
+              <Pressable
+                key={weapon.id}
+                onPress={() => toggleWeapon(weapon.id)}
+                style={[
+                  styles.weaponCard,
+                  isActive && styles.weaponCardActive,
+                ]}
+              >
+                <Text style={styles.weaponName}>{weapon.name}</Text>
+                <Text style={styles.weaponMeta}>
+                  {weapon.attack_ability.toUpperCase()} Aú{" "}
+                  {weapon.damage_type}
+                </Text>
+                <Text style={styles.weaponMeta}>
+                  {weapon.damage.split("+")[0]}
+                  {abilityMod(score) >= 0
+                    ? `+${abilityMod(score)}`
+                    : abilityMod(score)}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
+          Save Proficiencies
+        </Text>
+        <View style={styles.selectorRow}>
+          {Object.keys(formStats).map((ability) => (
+            <Pressable
+              key={ability}
+              onPress={() => toggleSaveProficiency(ability)}
+              style={[
+                styles.selector,
+                formSaveProficiencies.includes(ability) && styles.selectorActive,
+              ]}
+            >
+              <Text style={styles.selectorText}>{ability.toUpperCase()}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
+          Skill Proficiencies
+        </Text>
+        <View style={styles.selectorRow}>
+          {SKILLS.map((skill) => (
+            <Pressable
+              key={skill}
+              onPress={() => toggleSkillProficiency(skill)}
+              style={[
+                styles.selector,
+                formSkillProficiencies.includes(skill) && styles.selectorActive,
+              ]}
+            >
+              <Text style={styles.selectorText}>{skill}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
+          Spellcasting
+        </Text>
+        <TextInput
+          style={styles.formInput}
+          value={formSpellcastingAbility}
+          onChangeText={setFormSpellcastingAbility}
+          placeholder="Spellcasting ability (e.g. wis)"
+          placeholderTextColor={colors.mutedGold}
+        />
+        {classCantrips.length ? (
+          <View style={styles.spellGroup}>
+            <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
+              Cantrips
+            </Text>
+            <View style={styles.spellRow}>
+              {classCantrips.map((spell) => {
+                const selected = selectedCantrips.includes(spell.id);
+                return (
+                  <Pressable
+                    key={spell.id}
+                    onPress={() => toggleSpellSelection(spell)}
+                    style={[
+                      styles.spellButton,
+                      selected && styles.spellButtonActive,
+                    ]}
+                  >
+                    <Text
                       style={[
-                        styles.spellButton,
-                        selected && styles.spellButtonActive,
+                        styles.spellButtonText,
+                        selected && styles.spellButtonTextActive,
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.spellButtonText,
-                          selected && styles.spellButtonTextActive,
-                        ]}
-                      >
-                        {spell.name || spell.id}
-                      </Text>
-                      <Text style={styles.spellMeta}>Cantrip</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+                      {spell.name || spell.id}
+                    </Text>
+                    <Text style={styles.spellMeta}>Cantrip</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          ) : null}
-          {classSpells.length ? (
-            <View style={styles.spellGroup}>
-              <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
-                Spells
-              </Text>
-              <View style={styles.spellRow}>
-                {classSpells.map((spell) => {
-                  const selected = selectedSpells.includes(spell.id);
-                  return (
-                    <Pressable
-                      key={spell.id}
-                      onPress={() => toggleSpellSelection(spell)}
+          </View>
+        ) : null}
+        {classSpells.length ? (
+          <View style={styles.spellGroup}>
+            <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
+              Spells
+            </Text>
+            <View style={styles.spellRow}>
+              {classSpells.map((spell) => {
+                const selected = selectedSpells.includes(spell.id);
+                return (
+                  <Pressable
+                    key={spell.id}
+                    onPress={() => toggleSpellSelection(spell)}
+                    style={[
+                      styles.spellButton,
+                      selected && styles.spellButtonActive,
+                    ]}
+                  >
+                    <Text
                       style={[
-                        styles.spellButton,
-                        selected && styles.spellButtonActive,
+                        styles.spellButtonText,
+                        selected && styles.spellButtonTextActive,
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.spellButtonText,
-                          selected && styles.spellButtonTextActive,
-                        ]}
-                      >
-                        {spell.name || spell.id}
-                      </Text>
-                      <Text style={styles.spellMeta}>
-                        Lvl {getSpellLevel(spell)}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+                      {spell.name || spell.id}
+                    </Text>
+                    <Text style={styles.spellMeta}>
+                      Lvl {getSpellLevel(spell)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          ) : null}
-          <TextInput
-            style={[styles.formInput, styles.multilineInput]}
-            value={formItems}
-            onChangeText={setFormItems}
-            placeholder="Inventory / Items"
-            placeholderTextColor={colors.mutedGold}
-            multiline
-          />
-          <TextInput
-            style={[styles.formInput, styles.multilineInput]}
-            value={formTraits}
-            onChangeText={setFormTraits}
-            placeholder="Traits / Feats"
-            placeholderTextColor={colors.mutedGold}
-            multiline
-          />
-          <TextInput
-            style={[styles.formInput, styles.multilineInput]}
-            value={formLanguages}
-            onChangeText={setFormLanguages}
-            placeholder="Languages"
-            placeholderTextColor={colors.mutedGold}
-            multiline
-          />
-          <Button
-            label={createBusy ? "..." : "Create Character"}
-            onPress={handleCreateCharacter}
-            disabled={createBusy}
-          />
+          </View>
+        ) : null}
+        <TextInput
+          style={[styles.formInput, styles.multilineInput]}
+          value={formItems}
+          onChangeText={setFormItems}
+          placeholder="Inventory / Items"
+          placeholderTextColor={colors.mutedGold}
+          multiline
+        />
+        <TextInput
+          style={[styles.formInput, styles.multilineInput]}
+          value={formTraits}
+          onChangeText={setFormTraits}
+          placeholder="Traits / Feats"
+          placeholderTextColor={colors.mutedGold}
+          multiline
+        />
+        <TextInput
+          style={[styles.formInput, styles.multilineInput]}
+          value={formLanguages}
+          onChangeText={setFormLanguages}
+          placeholder="Languages"
+          placeholderTextColor={colors.mutedGold}
+          multiline
+        />
+        <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
+          Gender
+        </Text>
+        <View style={styles.selectorRow}>
+          {GENDERS.map((gender) => (
+            <Pressable
+              key={gender}
+              onPress={() => setFormGender(gender)}
+              style={[
+                styles.selector,
+                formGender === gender && styles.selectorActive,
+              ]}
+            >
+              <Text style={styles.selectorText}>{gender}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <TextInput
+          style={[styles.formInput, styles.multilineInput, styles.backstoryInput]}
+          value={formBackstory}
+          onChangeText={setFormBackstory}
+          placeholder="Backstory (optional - AI will generate one if left empty)"
+          placeholderTextColor={colors.mutedGold}
+          multiline
+          numberOfLines={4}
+        />
+        <Button
+          label={createBusy ? "..." : "Create Character"}
+          onPress={handleCreateCharacter}
+          disabled={createBusy}
+        />
       </Section>
 
     </>
@@ -930,6 +971,10 @@ const styles = StyleSheet.create({
   weaponMeta: {
     color: colors.mutedGold,
     fontSize: 10,
+  },
+  backstoryInput: {
+    minHeight: 100,
+    textAlignVertical: "top",
   },
 });
 

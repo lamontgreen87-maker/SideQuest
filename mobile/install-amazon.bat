@@ -1,0 +1,6 @@
+@echo off
+echo Installing APK...
+adb uninstall com.anonymous.dungeoncrawler
+adb install -r app-release.apk
+echo Launching...
+adb shell monkey -p com.anonymous.dungeoncrawler -c android.intent.category.LAUNCHER 1

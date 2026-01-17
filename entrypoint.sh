@@ -8,8 +8,9 @@ OLLAMA_PID=$!
 sleep 5
 
 # Pull required models (optional – you can skip if models are already present)
-ollama pull qwen2.5:7b || true
-ollama pull qwen2.5:3b || true
+# Pull required models (optional – you can skip if models are already present)
+ollama pull qwen3:8b || true
+ollama pull qwen3:4b || true
 ollama pull qwen2.5:1.5b || true
 
 # Wait for Ollama to be fully ready (simple health check loop)

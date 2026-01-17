@@ -24,6 +24,9 @@ class Character:
     max_hp: int
     hp: int
     weapons: Dict[str, Weapon]
+    transport: Optional[str] = None
+    gender: Optional[str] = None
+    appearance: Optional[str] = None
     race: Optional[str] = None
     background: Optional[str] = None
     alignment: Optional[str] = None
@@ -93,7 +96,11 @@ def serialize_character(pc: Character) -> Dict[str, object]:
                 "finesse": weapon.finesse,
             }
             for key, weapon in pc.weapons.items()
+            for key, weapon in pc.weapons.items()
         },
+        "transport": pc.transport,
+        "gender": pc.gender,
+        "appearance": pc.appearance,
         "race": pc.race,
         "background": pc.background,
         "alignment": pc.alignment,
@@ -168,7 +175,11 @@ def deserialize_rules_session(data: Dict[str, object]) -> RulesSession:
                 finesse=bool(value.get("finesse", False)),
             )
             for key, value in pc_data["weapons"].items()
+            for key, value in pc_data["weapons"].items()
         },
+        transport=pc_data.get("transport"),
+        gender=pc_data.get("gender"),
+        appearance=pc_data.get("appearance"),
         race=pc_data.get("race"),
         background=pc_data.get("background"),
         alignment=pc_data.get("alignment"),
@@ -377,6 +388,9 @@ def reset_character(pc: Character) -> Character:
         max_hp=pc.max_hp,
         hp=pc.max_hp,
         weapons=dict(pc.weapons),
+        transport=pc.transport,
+        gender=pc.gender,
+        appearance=pc.appearance,
         race=pc.race,
         background=pc.background,
         alignment=pc.alignment,

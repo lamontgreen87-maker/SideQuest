@@ -427,7 +427,7 @@ export default function StoryScreen({
         if (klass) payload.klass = klass;
         const response = await Promise.race([
           apiPost(serverUrl, "/api/intro", payload),
-          new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
+          new Promise((resolve) => setTimeout(() => resolve(null), 30000)),
         ]);
         return stripThinking(response?.intro || null);
       } catch (error) {
@@ -447,7 +447,7 @@ export default function StoryScreen({
         };
         const response = await Promise.race([
           apiPost(serverUrl, `/api/sessions/${id}/intro`, payload),
-          new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+          new Promise((resolve) => setTimeout(() => resolve(null), 30000)),
         ]);
         if (!response) return null;
         return response?.intro ? sanitizeIntro(response.intro) : null;
@@ -782,6 +782,7 @@ export default function StoryScreen({
   }, [serverUrl, rulesSessionId, shouldNarrate, makeMessage, playerTurn]);
 
   const sendMessage = useCallback(async () => {
+    Keyboard.dismiss();
     const trimmed = input.trim();
     const payloadMessage = trimmed || resendMessage;
     if (!payloadMessage || loading) return;
