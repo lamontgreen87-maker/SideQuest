@@ -1,5 +1,5 @@
 import React from "react";
-import { FantasyButton } from "./FantasyButton";
+import { StyleSheet, Text, TouchableOpacity, ActivityIndicator } from "react-native";
 
 export default function Button({
   label,
@@ -8,21 +8,57 @@ export default function Button({
   variant = "primary",
   style,
 }) {
-  const mapVariant = (v) => {
-    switch (v) {
-      case "danger": return "crimson";
-      case "ghost": return "ghost";
-      default: return "gold";
-    }
-  };
-
   return (
-    <FantasyButton
-      title={label}
+    <TouchableOpacity
+      style={[
+        styles.container,
+        variant === "ghost" ? styles.ghost : styles.primary,
+        disabled && styles.disabled,
+        style
+      ]}
       onPress={onPress}
       disabled={disabled}
-      variant={mapVariant(variant)}
-      style={style}
-    />
+      activeOpacity={0.7}
+    >
+      <Text style={[
+        styles.text,
+        variant === "ghost" ? styles.textGhost : styles.textPrimary
+      ]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: 5,
+  },
+  primary: {
+    backgroundColor: "#2196F3", // Standard Blue
+  },
+  ghost: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "#444",
+  },
+  disabled: {
+    opacity: 0.5,
+    backgroundColor: "#ccc",
+  },
+  text: {
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  textPrimary: {
+    color: "#fff",
+  },
+  textGhost: {
+    color: "#444",
+  }
+});

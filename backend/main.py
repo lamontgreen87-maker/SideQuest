@@ -52,11 +52,26 @@ from rules import (
 logger = logging.getLogger("uvicorn.error")
 app = FastAPI()
 
+# --- CORS Configuration ---
+# Allow credentials and all headers/methods for configured origins
+# This is crucial for web clients (React, Svelte, or vanilla HTML/JS) to talk to the backend.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For now, allow all. In prod, use CORS_ORIGINS.split(",")
+    allow_credentials=False, # Must be False if origins is "*"
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok", "model": MODEL_NAME}
+
 PRIVACY_POLICY_PATH = Path(__file__).resolve().parent / "static" / "privacy.html"
 logger = logging.getLogger("uvicorn.error")
 
 # --- App Configuration ---
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").strip().rstrip("/")
 print(f"DEBUG: OLLAMA_URL is set to '{OLLAMA_URL}'")
 
 @app.on_event("startup")
@@ -70,6 +85,11 @@ async def startup_diagnostics():
                 logger.info(f"DIAGNOSTIC: Installed Models -> {models}")
             else:
                 logger.error(f"DIAGNOSTIC: Failed to list models (Status {resp.status_code})")
+            
+            # Start Background Workers
+            npc_pool_manager.start()
+            world_sim_manager.start()
+            
     except Exception as e:
         logger.error(f"DIAGNOSTIC: Failed to connect to Ollama: {e}")
 MODEL_NAME = os.getenv("MODEL_NAME", "qwen3:4b").strip()
@@ -101,6 +121,9 @@ GOOGLE_CLIENT_ID = os.getenv(
     "GOOGLE_CLIENT_ID",
     "816546538702-6mrlsg51b2u6v6tdinc07fsnhbvmeqha.apps.googleusercontent.com",
 )
+
+GLOBAL_AI_BUSY = False # Global flag to pause background tasks during active user turns
+
 
 PLAY_PRODUCT_CREDITS = {
     "credits_100": 100,
@@ -159,16 +182,24 @@ DEFAULT_SYSTEM_PROMPT = (
     "NEVER narrate the player character's actions, thoughts, feelings, or dialogue. "
     "The player is the ultimate authority on their character's internal state and actions. "
     "OBJECT ADHERENCE: Strictly respect the objects, items, and environment descriptions the player uses. If the player lights a torch, it is a torch, not a candle or lamp. Do not rephrase or substitute player-defined objects. "
+    "GM AUTHORITY: You are the Game Engine and Rules Arbiter. The player is NOT the GM. "
+    "Validate all player actions against D&D 5e rules and physics. "
+    "STAT ADHERENCE: Strictly respect the player's Armor Class (AC) and Health Points (HP). Use these as the source of truth for combat outcomes and damage. "
+    "If a player attempts an impossible action (e.g., flying without magic, lifting a house, persuading a hostile king with one word), DO NOT allow it. "
+    "Instead, narrate the ATTEMPT and the FAILURE (e.g., 'You flap your arms, but gravity holds you fast.', 'You strain against the stone, but it does not budge.'). "
     "You are the NARRATOR and the VOICE OF ALL NPCs. Describe the world's reaction in rich detail. "
     "DIALOGUE RULES: When an NPC speaks, give their response. If they are also performing an action (like leaving, attacking, or handing over an item), describe that action as part of the same paragraph, and then STOP. Do not describe the player's reaction; wait for the player to reply or act. "
     "After the player acts, you MUST narrate the immediate physical result, valid consequences, and how the setting changes. "
     "DO NOT just describe the player doing what they said - CONTINUE THE STORY by showing what they encounter, discover, or face as a result. "
     "Paint the scene vividly. Tell the player what they see, hear, smell, or face NEXT. Focus on sensory details (damp stone, smell of rot, flickering light). "
     "If the player enters a new location, describe what's inside, who's there, and what's happening. "
-    "TRAVEL RULES: When the player travels, 'goes to' a place, or 'moves forward', narrate the journey and THEN narrate their arrival at a specific destination (e.g., the gates of the keep, a clearing in the woods, the tavern door). Describe what they see at that destination. Do not end the narration while they are still in transit; always reach a point where they must make a new choice. "
+    "TRAVEL RULES: When the player moves, travels, or exploring, you MUST complete the journey in the same response. "
+    "Narrate the movement briefly, then explicitly ARRIVE at a new, distinct location (a room, a clearing, a junction). "
+    "Describe this new location in detail (dimensions, exits, lighting, smells, furniture). "
+    "NEVER end a response while the player is 'still walking' or in a hallway; always land them in a specific place where they can interact with something new. "
     "Stop narrating exactly when the player needs to make a new choice or respond to an event. "
-    "Always end by asking what the player does next. "
-    "Provide 2-3 short paragraphs of narration. Do not be overly brief. "
+    "End by inviting the player to act. "
+    "Provide 1-2 paragraphs of rich narration. "
     "Permit and describe adult themes including visceral gore, sexual situations, alcohol, tobacco, and drug use (fantasy or otherwise) when they fit the narrative. "
     "CLASS CONSTRAINTS: Enforce class limitations. Barbarians, Fighters, Rogues, and Monks CANNOT cast spells. "
     "If a non-caster attempts magic, narrate the failure (e.g., they wave their hands without effect). "
@@ -178,6 +209,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "If the spell is found, resolve the action. "
     "If NOT found, narrate the failure (e.g., 'You reach for the magic, but the words escape you. You do not know that spell.'). "
     "Do not allow players to cast spells they do not possess. "
+    "NO INSTANT TRAVEL: Magic cannot be used for instant transportation. Teleportation spells (like Misty Step, Dimension Door, Teleport) ALWAYS FAIL due to the world's magical interference. "
+    "Characters must explicitly travel through the dangerous world. Narrate the failure of any teleportation attempt graphically (e.g., 'The space warps and rejects you, slamming you back to the ground.'). "
     "SOCIAL IDENTITY: Check the player's 'gender' and 'appearance' (skin color, race). "
     "Reflect how the world reacts to them based on these traits. "
     "If the setting is prejudiced or hostile to their kind, show it in the NPC interactions and descriptions. "
@@ -200,15 +233,39 @@ DEFAULT_SYSTEM_PROMPT = (
     "Example: 'You roll a 15 against AC 12, striking true with your blade...' or 'The goblin rolls a natural 1, fumbling its dagger...'. "
     "Make the mechanics part of the visceral description. Show the math behind the mayhem."
     "Respond with final narration only, no preface."
+    "VARIETY: Avoid repetitive vocabulary. Do not overuse words like 'ichor', 'shiver', 'spine', 'visceral', 'crimson', or 'shadow'. Use diverse synonyms and creative descriptions."
 )
 DEFAULT_CAMPAIGN_BRIEF = (
-    "A storm-battered frontier teeters as a buried horror stirs beneath ruined keeps. "
-    "Disappearances and a leaking vault light pull the hero into a desperate hunt."
+    "The world is in chaos. Ancient powers stir in the shadows, and the realms of men foster corruption and greed. "
+    "You seek to carve your own path amidst the turmoil."
 )
-DEFAULT_CAMPAIGN_WORLD = (
-    "A scarred frontier of ruined keeps and flooded mines clings to a river of ash. "
-    "Rival factions and a lurking horror contest control as vanishings spread."
-)
+
+# FALLBACK POOLS (For when AI times out)
+FALLBACK_WORLDS = [
+    "A scarred frontier of ruined keeps and flooded mines clings to a river of ash.",
+    "A massive, vertical city built into the walls of an infinite abyss.",
+    "A frozen wasteland where the sun hasn't risen in a hundred years.",
+    "A humid, choking jungle of giant fungi and insectoid horrors.",
+    "A floating archipelago of shattered islands drifting through a magical void.",
+    "A cursed desert where the sand whispers the names of the dead.",
+    "A clockwork metropolis grinding to a halt as its gears rust and fail.",
+    "A sunken realm enclosed in a massive air bubble beneath a black ocean.",
+    "A war-torn kingdom where the dead rise every night to fight again.",
+    "A silence-shrouded monastery where sound itself is a lethal weapon."
+]
+
+FALLBACK_BRIEFS = [
+    "The frontier teeters. A buried horror stirs beneath the ruins, demanding a sacrifice.",
+    "The Abyss calls. People are jumping, and those who return are changed.",
+    "The Long Night deepens. Something is hunting the last warmth in the world.",
+    "The Rot spreads. Spores are turning villagers into hive-minded husks.",
+    "Gravity is failing. The islands are drifting apart, and sky-preds are feasting.",
+    "The dunes are hungry. An ancient pharaoh wakes to reclaim his empire.",
+    "The Great Gear has stopped. The Machine God strikes down those who try to fix it.",
+    "The dome is cracking. The crushing deep threatens to drown the last city.",
+    "Death is broken. No one stays dead, and the world is filling up.",
+    "Silence or death. A sound-hunting beast stalks the library of souls."
+]
 
 def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]) -> str:
     safe_state = json.dumps(state, ensure_ascii=True)
@@ -257,6 +314,20 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
                         locations_line += f"    * {npc.get('name')} ({npc.get('role')}): {npc.get('description')} [Base Disposition: {npc.get('disposition_score', 7)}]\n"
             else:
                 locations_line += f"- {loc_name}: {loc_details}\n"
+
+    recent_events = world_state.get("recent_events", [])
+    events_line = ""
+    if recent_events:
+        # Take the last 3 events to keep context fresh but not overwhelming
+        latest = recent_events[-3:]
+        events_line = "Recent World Events (Rumors/News):\n" + "\n".join([f"- {evt}" for evt in latest]) + "\n"
+
+    key_npcs_line = ""
+    if "important_npcs" in world_state and world_state["important_npcs"]:
+        key_npcs_line = "KEY NPCs (These characters are persistent and important):"
+        for name, data in world_state["important_npcs"].items():
+            key_npcs_line += f"\n- {name}: {data.get('role', 'Unknown')} ({data.get('description', '')[:50]}...)"
+        key_npcs_line += "\n"
     staged_lore_line = ""
     if "staged_lore" in world_state and world_state["staged_lore"]:
         staged_lore_line = "Staged Lore (you can introduce these elements into the story):\n"
@@ -275,7 +346,6 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
     return (
         DEFAULT_SYSTEM_PROMPT
         + " Use the game state JSON below. If the state changes, reflect it. "
-        + "Always end the player-visible narration with a direct question. "
         + "End with a separate line: 'NARRATION_HINT: narrate' or "
         + "'NARRATION_HINT: skip' to signal whether the next action deserves narration.\n"
         + "Maintain continuity with the recent conversation. "
@@ -284,6 +354,8 @@ def build_story_system_prompt(state: Dict[str, Any], world_state: Dict[str, Any]
         + combat_line
         + loot_line
         + locations_line
+        + events_line
+        + key_npcs_line
         + staged_lore_line
         + (f"SOCIAL REACTION: {state.get('social_result')}\n" if state.get("social_result") else "")
         + ("Campaign brief:\n" + final_campaign_summary + "\n" if final_campaign_summary else "")
@@ -304,8 +376,8 @@ def strip_prefixes(text: str) -> str:
 def split_narration_hint(text: str) -> Tuple[str, Optional[str]]:
     hint = None
     kept = []
-    # Relaxed Regex for "narration_hint" to catch unbracketed versions
-    hint_pattern = re.compile(r"^(?:\[?\s*narration[_\s]+hint\s*\]?\s*:?)(.*)$", re.IGNORECASE)
+    # Relaxed Regex for "narration_hint" to catch unbracketed versions and leading/trailing whitespace
+    hint_pattern = re.compile(r"^\s*(?:\[?\s*narration[_\s]+hint\s*\]?\s*:?)(.*)$", re.IGNORECASE)
     
     for line in text.splitlines():
         stripped = line.strip()
@@ -689,6 +761,260 @@ world_state_store: Dict[str, Dict[str, Any]] = {}
 campaign_seed_locks: Dict[str, asyncio.Lock] = {}
 intro_locks: Dict[str, asyncio.Lock] = {}
 encounter_setup_locks: Dict[str, asyncio.Lock] = {}
+
+
+class NPCPoolManager:
+    def __init__(self, target_size: int = 5):
+        self.pool: List[Dict[str, Any]] = []
+        self.target_size = target_size
+        self.lock = asyncio.Lock()
+        self.worker_task: Optional[asyncio.Task] = None
+        self.active_narration = False  # Flag to pause generation during narration
+        self.seen_names: Set[str] = set() # Deduplication cache
+
+    def start(self):
+        if not self.worker_task:
+            self.worker_task = asyncio.create_task(self._worker_loop())
+            logger.info("NPCPoolManager background worker started.")
+
+    async def _worker_loop(self):
+        logger.info("NPCPoolManager worker loop active.")
+        while True:
+            try:
+                # Pause if pool is full or if narration is active (to save GPU)
+                if len(self.pool) >= self.target_size:
+                    await asyncio.sleep(10)
+                    continue
+                
+                if self.active_narration or GLOBAL_AI_BUSY:
+                    await asyncio.sleep(2)
+                    continue
+
+                # Generate a deep, story-integrated NPC
+                npc = await self._generate_background_npc()
+                if npc:
+                    name = npc.get('name', '').strip()
+                    if not name or name in self.seen_names:
+                         logger.info(f"NPCPoolManager: Skipping duplicate/empty name '{name}'")
+                         continue
+                        
+                    async with self.lock:
+                        self.pool.append(npc)
+                        self.seen_names.add(name)
+                        # Keep cache small
+                        if len(self.seen_names) > 50:
+                             # Remove random item by popping from iteration (inefficient but safe enough for small set)
+                             for item in self.seen_names:
+                                 self.seen_names.discard(item)
+                                 break
+                        logger.info(f"NPCPoolManager: Added new NPC '{npc.get('name')}' to pool. Size: {len(self.pool)}")
+                        
+                        # Permanence Check
+                        if npc.get("is_key"):
+                            # Helper to grab default world
+                            world = world_state_store.get("default")
+                            if world:
+                                if "important_npcs" not in world:
+                                    world["important_npcs"] = {}
+                                # Store by name for easy lookup
+                                world["important_npcs"][npc["name"]] = npc
+                                persist_world_state()
+                                logger.info(f"NPCPoolManager: PROMOTED '{npc['name']}' to Key NPC status.")
+                
+                # Sleep between generations to let system breathe
+                await asyncio.sleep(30)
+                if GLOBAL_AI_BUSY:
+                     await asyncio.sleep(10)
+
+            except Exception as e:
+                logger.error(f"NPCPoolManager worker error: {e}")
+                await asyncio.sleep(60)
+
+    async def _generate_background_npc(self) -> Optional[Dict[str, Any]]:
+        # Gather deep context
+        world_summary = str(world_state_store.get("summary") or "A dangerous fantasy world.")
+        campaign_summary = ""
+        campaign = world_state_store.get("campaign")
+        if isinstance(campaign, dict):
+            campaign_summary = str(campaign.get("summary") or "").strip()
+        
+        # Pull recent events/rumors if available
+        current_events = "Factions are maneuvering for control." 
+        
+        # PRE-GENERATE NAME WITH ENTROPY
+        entropy_name = await _generate_random_npc_name()
+
+        prompt = (
+            "Create a DETAILED, unique NPC for a dark fantasy setting.\n"
+            f"World Context: {world_summary}\n"
+            f"Campaign Arc: {campaign_summary}\n"
+            f"Current Events: {current_events}\n"
+            "REQUIREMENTS:\n"
+            f"1. Name and Role: USE THIS NAME: '{entropy_name}'. Assign them a specific Role.\n"
+            "2. Appearance: Brief sensory details.\n"
+            "3. PERSONALITY: How are they feeling TODAY?\n"
+            "4. BACKSTORY HOOK: A specific past event.\n"
+            "5. SECRET/RUMOR: They know something interesting.\n"
+            "7. Is Key NPC? (Boolean): Set to true (approx 10% chance) if significant.\n"
+            "8. Current Location: Where are they logically right now?\n"
+            "Return ONLY a JSON object: { 'name': '...', 'role': '...', 'description': '...', 'mood': '...', 'backstory': '...', 'secret': '...', 'disposition_score': 7, 'is_key': false, 'current_location': '...' }"
+        )
+
+        messages = [
+            {"role": "system", "content": "You are a character writer. Return ONLY valid JSON."},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            # OPTIMIZATION: Use STANDARD model for pool (fast)
+            # We don't need 70B for a pool NPC that might be thrown away.
+            raw = await ollama_chat_with_model(
+                messages,
+                fast=True, 
+                model_name=MODEL_NAME,
+                fallback_model=FALLBACK_MODEL_NAME
+            )
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+        except Exception as e:
+            logger.warning(f"Background NPC gen failed: {e}")
+        return None
+
+    async def claim_npc(self, role_hint: str = None) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            # 1. Try to find a match if hint provided
+            if role_hint:
+                for i, npc in enumerate(self.pool):
+                    if role_hint.lower() in npc.get('role', '').lower() or role_hint.lower() in npc.get('description', '').lower():
+                        logger.info(f"NPCPoolManager: Claimed specific NPC '{npc['name']}' for hint '{role_hint}'")
+                        return self.pool.pop(i)
+            
+            # 2. Fallback: Pop the oldest NPC if any exist
+            if self.pool:
+                npc = self.pool.pop(0)
+                logger.info(f"NPCPoolManager: Claimed generic NPC '{npc['name']}'")
+                return npc
+        
+        return None
+
+    def set_narration_active(self, active: bool):
+        self.active_narration = active
+
+npc_pool_manager = NPCPoolManager()
+
+class WorldSimManager:
+    def __init__(self, interval_seconds: int = 900): # Default 15 mins
+        self.interval = interval_seconds
+        self.worker_task: Optional[asyncio.Task] = None
+        self.active_narration = False
+
+    def start(self):
+        if not self.worker_task:
+            self.worker_task = asyncio.create_task(self._worker_loop())
+            logger.info("WorldSimManager background worker started.")
+
+    async def _worker_loop(self):
+        logger.info("WorldSimManager worker loop active.")
+        while True:
+            try:
+                # Wait for interval (broken into chunks to allow quicker shutdown/check)
+                for _ in range(10): 
+                    await asyncio.sleep(self.interval / 10)
+                
+                if self.active_narration or GLOBAL_AI_BUSY:
+                    # Don't burn GPU while player is reading/playing
+                    await asyncio.sleep(5)
+                    continue
+
+                await self._step_world_simulation()
+
+            except Exception as e:
+                logger.error(f"WorldSimManager worker error: {e}")
+                await asyncio.sleep(60)
+
+    async def _step_world_simulation(self):
+        # 1. Ensure we have data
+        if not world_state_store:
+            return
+            
+        # We generally operate on the 'default' world or the most active one. 
+        # For simplicity in this single-tenant-ish setup, we grab the first available world state or a specific key.
+        # Ideally, this should loop through active campaigns.
+        world_key = "default" 
+        world_state = world_state_store.get(world_key)
+        if not world_state:
+            # If no world state exists yet, we can't simulate
+            return
+
+        self._ensure_factions(world_state)
+        
+        # 2. Pick a faction
+        factions = world_state.get("factions", [])
+        if not factions:
+            return
+        
+        actor = random.choice(factions)
+        
+        # 3. Generate Move
+        logger.info(f"WorldSimManager: Simulating move for {actor['name']}...")
+        event_text = await self._generate_faction_move(actor, world_state)
+        
+        if event_text:
+            # 4. Apply Update
+            self._record_event(world_state, event_text)
+            logger.info(f"WorldSimManager: Event recorded -> {event_text}")
+            persist_world_state()
+
+    def _ensure_factions(self, world_state: Dict[str, Any]):
+        if "factions" not in world_state:
+            world_state["factions"] = [
+                {"name": "The Iron Concord", "goal": "Maintain strict order and tax trade.", "status": "Strong"},
+                {"name": "The Ashen Cult", "goal": "Awaken the sleeper beneath the river.", "status": "Hidden"},
+                {"name": "The Guild of Whispers", "goal": "Profit from secrets and contraband.", "status": "Neutral"},
+                {"name": "The Wildfolk Clans", "goal": "Reclaim the forest from civilization.", "status": "Hostile"}
+            ]
+        if "recent_events" not in world_state:
+            world_state["recent_events"] = []
+
+    async def _generate_faction_move(self, faction: Dict[str, Any], world_state: Dict[str, Any]) -> str:
+        summary = world_state.get("summary", "")
+        recent = "\n".join(world_state.get("recent_events", [])[-3:])
+        
+        prompt = (
+            f"The world is a dark fantasy setting. {summary}\n"
+            f"A Faction, '{faction['name']}' (Goal: {faction['goal']}), makes a move.\n"
+            f"Recent History:\n{recent}\n"
+            "Describe ONE significant action this faction takes 'off-screen'.\n"
+            "It should change the state of the world slightly (e.g. seizing a bridge, bribing an official, starting a ritual).\n"
+            "Keep it under 2 sentences. Format as a rumor or news update.\n"
+            "Example: 'The Iron Concord has declared martial law in the lower districts following the riots.'"
+        )
+        
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            # Heavy model for logical consistency
+            text = await ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL)
+            return text.strip()
+        except Exception as e:
+            logger.error(f"Faction move gen failed: {e}")
+            return ""
+
+    def _record_event(self, world_state: Dict[str, Any], event_text: str):
+        if "recent_events" not in world_state:
+            world_state["recent_events"] = []
+        
+        # Push to list, keep max 10
+        world_state["recent_events"].append(f"[{stamp_now()}] {event_text}")
+        if len(world_state["recent_events"]) > 10:
+            world_state["recent_events"].pop(0)
+            
+        # Potentially update the main summary occasionally (future feature)
+
+    def set_narration_active(self, active: bool):
+        self.active_narration = active
+
+world_sim_manager = WorldSimManager(interval_seconds=600) # 10 minutes for testing (usually slower)
 
 
 def load_rules_sessions() -> None:
@@ -1400,7 +1726,7 @@ def build_encounter_setup_messages(
         {
             "role": "system",
             "content": (
-                "You are the campaign architect. Write 1-2 sentences that foreshadow "
+                "You are the campaign architect. Write a short paragraph that foreshadows "
                 "a future encounter. Keep it subtle and atmospheric. Do NOT start combat, "
                 "do NOT call it an encounter, and do NOT ask a direct question. Avoid D&D references."
             ),
@@ -1551,10 +1877,17 @@ def default_game_state() -> Dict[str, Any]:
     }
 
 def default_world_state() -> Dict[str, Any]:
+    # Pre-seed a random campaign hook to prevent AI from defaulting to "Comet" trope
+    brief = random.choice(FALLBACK_BRIEFS)
+    world = random.choice(FALLBACK_WORLDS)
+    
     return {
         "summary": "",
         "facts": [],
-        "campaign": {},
+        "campaign": {
+            "summary": f"{brief} {world}",
+            "generated": False
+        },
         "campaign_world": "",
         "next_encounter_at": None,
         "next_encounter": None,
@@ -1663,6 +1996,10 @@ def apply_character_to_state(
                 inventory.append(item)
         updated["inventory"] = inventory
 
+    # Set initial location if missing
+    if "current_location_id" not in updated:
+        updated["current_location_id"] = "loc_start"
+
     updated["updated_at"] = stamp_now()
     return updated
 
@@ -1694,6 +2031,19 @@ def apply_character_to_world(
     facts.append(f"{label} is a {klass_value}.")
     updated["facts"] = facts[-50:]
     updated["summary"] = f"Character in world: {label} the {klass_value}."
+    
+    # Ensure starting location exists
+    if "locations" not in updated or not updated["locations"]:
+        start_id = "loc_start"
+        start_location = {
+            "name": "The Whispering Woods",
+            "description": "A dense, ancient forest where the trees twist into strange shapes. The air is thick with mist and the scent of damp earth. Faint whispers seem to drift on the wind.",
+            "exits": ["north", "east"],
+            "npcs": [],
+            "items": [],
+        }
+        updated["locations"] = {start_id: start_location}
+    
     updated["updated_at"] = stamp_now()
     return updated
 
@@ -1708,7 +2058,7 @@ def build_ollama_options(fast: bool) -> Dict[str, Any]:
     if fast:
         return {
             **base,
-            "num_predict": 256,
+            "num_predict": 350,
             "temperature": 0.6,
         }
     return {
@@ -1731,7 +2081,7 @@ def build_rules_prompt(session: RulesSession, last_log: str) -> List[Dict[str, s
             "content": (
                 "You are a strict fantasy narrator. "
                 "Do not change results, add new mechanics, or add extra effects. "
-                "Narrate only the outcome in 2-4 sentences."
+                "Narrate the outcome in a descriptive narrative paragraph."
             ),
         },
         {
@@ -1796,7 +2146,7 @@ async def ollama_chat_with_model(
         }
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
         if response.status_code != 200:
-            logger.error(f"Ollama Error for model '{payload['model']}': Status {response.status_code}")
+            logger.error(f"Ollama Error for model '{payload['model']}': Status {response.status_code} | Body: {response.text}")
 
         if should_retry_with_fallback(response, payload["model"]) and fallback != payload["model"]:
             logger.warning(
@@ -1932,7 +2282,7 @@ def strip_thoughts(text: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     
     # Remove lingering markers if any
-    markers = ["<think>", "</think>", "Thought:", "Reasoning:", "Analysis:"]
+    markers = ["<think>", "</think>", "Thought:", "Reasoning:", "Analysis:", "NARRATION:"]
     cleaned = text
     for marker in markers:
         cleaned = cleaned.replace(marker, "")
@@ -1942,6 +2292,11 @@ def strip_thoughts(text: str) -> str:
     cleaned = re.sub(r"(?i)you said\s*:\s*\"?[^\n]+\"?", "", cleaned)
     cleaned = re.sub(r"(?im)^\s*you said[^\n]*\n?", "", cleaned)
     cleaned = re.sub(r"(?i)you said[^.!?]*[.!?]?", "", cleaned)
+    
+    # Strip hallucinated headers and hints (including bracketed ones)
+    cleaned = re.sub(r"(?im)^\s*NARRATION:\s*", "", cleaned)
+    cleaned = re.sub(r"(?im)^\s*\[?NARRATION[_\s]+HINT:\s*\w+\]?\s*$", "", cleaned)
+    cleaned = re.sub(r"(?im)^\s*\[?HINT:\s*\w+\]?\s*$", "", cleaned)
     
     # Compress multiple newlines which might create "separate bubble" effects
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -2017,7 +2372,7 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 def build_clerk_messages(
-    state: Dict[str, Any], world_state: Dict[str, Any], user_input: str
+    state: Dict[str, Any], world_state: Dict[str, Any], user_input: str, last_narrative: str = ""
 ) -> List[Dict[str, str]]:
     safe_state = json.dumps(state, ensure_ascii=True)
     safe_world = json.dumps(world_state, ensure_ascii=True)
@@ -2031,29 +2386,28 @@ def build_clerk_messages(
                 "world_summary (string), inventory_add (array), inventory_remove (array), "
                 "action_type (string), new_locations (array of strings), new_npcs (array of strings), "
                 "used_staged_lore (array of strings). "
-                "OBJECT ADHERENCE: Strictly respect the specific objects and items mentioned by the player (e.g., if they light a 'torch', do not call it a 'candle'). "
-                "INVENTORY VERIFICATION: Before narrating an action that uses an item (e.g., 'I pull out my map', 'I light a torch'), check if that item (or a close match) is in the player's inventory (state.inventory). "
-                "If the item is NOT in the inventory, set should_narrate to false and provide a helpful player_reply explaining that they don't have that item (e.g., 'You search your pack but can't find a map.'). "
-                "DIALOUGE HANDLING: Preserve all spoken words in story_input. If the player uses quotes, keep them. "
-                "If the player implies speech (e.g., 'I ask...', 'I say...', 'I tell...') or uses shorthand mixed input (e.g., 'bye, wave' or 'hello, I walk in'), treat it as a dialogue interaction. "
-                "story_input should be the player's message cleaned to only story actions and dialogue. Do NOT strip dialogue. "
-                "If should_narrate is false, player_reply should be a brief non-narrative ack. "
-                "action_type: use 'dialogue' if the player is speaking to someone (even without quotes), 'travel' for moving between locations, 'equip' for items, or 'narrate' for physical actions. "
-                "world_updates should list new persistent facts (short sentences) to store. "
-                "world_summary should be a concise 1-3 sentence rolling summary of the story so far. "
-                "inventory_add should list newly discovered loot items to add to inventory. "
-                "inventory_remove should list items that are consumed or removed. "
-                "new_locations should list any new and significant locations mentioned in the story. "
-                "used_staged_lore should list the names of any NPCs or locations from the 'staged_lore' that were used in the story. "
-                "If a physical combat encounter begins, include 'encounter': {'name': 'Name of Enemy', 'cr': 'optional CR'} in the JSON. "
-                "Make leveling part of your GM goals: aim for progression from level 1 to level 5 "
-                "in about 2 hours of play (roughly ~5 encounters). When a milestone is reached, "
-                "update state.character.level and add a world_update like 'Level up: <name> is now level X.'"
+                "OBJECT ADHERENCE: Strictly respect the specific objects and items mentioned by the player. "
+                "LOCATION CONSISTENCY: Check 'Previous Narrative' for described exits or landmarks. "
+                "If the player moves (e.g., 'I go East'), use the location explicitly described in that direction (e.g., if prose said 'to the east is a Fissure', the new location MUST be 'The Fissure'). "
+                "Do NOT invent new locations if one was just described. "
+                "INVENTORY LOGIC: "
+                "1. If the player EXPLICITLY says 'I pick up X', 'I take X', 'I grab X', ADD it to 'inventory_add'. "
+                "2. If the player says 'I use X' (e.g. 'I light a torch'), VERIFY it is in state.inventory. If not, set should_narrate=false and explain in player_reply. "
+                "3. If the player says 'I drop X' or consumes it, add to 'inventory_remove'. "
+                "LOCATION LOGIC: "
+                "Only add to 'new_locations' if the player is TRAVELING to a COMPLETELY NEW, NAMED place that needs generation (e.g., 'I go to the Dark Tower'). "
+                "Do NOT create new locations for small rooms, corners, or already visited places. This triggers expensive generation, so use sparingly. "
+                "DIALOUGE: Preserve all spoken words in story_input. "
+                "story_input should be the cleaned player message. "
+                "action_type: 'dialogue', 'travel', 'equip', 'narrate', or 'combat'. "
+                "Make leveling part of your GM goals: aim for level 5 in ~2 hours. "
             ),
         },
         {
             "role": "user",
             "content": (
+                "Previous Narrative (Context):\n"
+                f"{last_narrative}\n\n"
                 "Current state JSON:\n"
                 f"{safe_state}\n\n"
                 "World state JSON:\n"
@@ -2091,14 +2445,47 @@ def build_filter_messages(state: Dict[str, Any], story_text: str) -> List[Dict[s
         },
     ]
 
+async def clerk_extract_state_from_narration(
+    state: Dict[str, Any],
+    world_state: Dict[str, Any],
+    narration: str,
+) -> Optional[Dict[str, Any]]:
+    # Quick filter: only run if narration has keywords suggesting loot/loss/status
+    triggers = ["found", "looted", "picked up", "took", "lost", "dropped", "gave", "consumed", "eats", "drinks", "gained", "suffered", "item", "inventory"]
+    if not any(t in narration.lower() for t in triggers):
+        return None
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a game state extractor. Analyze the narration and output JSON. "
+                "Extract: 'new_items' (list of strings), 'lost_items' (list of strings), 'new_conditions' (list of strings like 'Prone', 'Blind'). "
+                "Only output JSON. If nothing relevant, return empty JSON."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Narration: {narration}\n\nExtract JSON:",
+        },
+    ]
+    try:
+         raw = strip_thoughts((await ollama_chat_with_model(
+             messages, fast=True, model_name=CLERK_MODEL_NAME, fallback_model=CLERK_FALLBACK_MODEL
+         )).strip())
+         return extract_json_object(raw)
+    except Exception:
+         return None
+
 async def clerk_update_state(
     state: Dict[str, Any],
     world_state: Dict[str, Any],
     user_input: str,
+    last_narrative: str = "",
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     log_clerk_event("update_state started")
-    messages = build_clerk_messages(state, world_state, user_input)
+    messages = build_clerk_messages(state, world_state, user_input, last_narrative)
     raw = strip_thoughts((await ollama_chat_with_model(
         messages, fast=True, model_name=CLERK_MODEL_NAME, fallback_model=CLERK_FALLBACK_MODEL
     )).strip())
@@ -2451,24 +2838,17 @@ async def _build_campaign_world(state: Dict[str, Any]) -> str:
         },
         {"role": "user", "content": "Create a compact world state."},
     ]
-    try:
-        text = strip_thoughts(
-            (
-                await asyncio.wait_for(
-                    ollama_chat_with_model(
-                        messages,
-                        fast=True,
-                        model_name=HEAVY_MODEL_NAME,
-                        fallback_model=HEAVY_FALLBACK_MODEL,
-                    ),
-                    timeout=25,
-                )
-            ).strip()
-        )
-    except asyncio.TimeoutError:
-        log_clerk_event("campaign_world timeout fallback")
-        return DEFAULT_CAMPAIGN_WORLD
-    return text or DEFAULT_CAMPAIGN_WORLD
+    text = strip_thoughts(
+        (
+            await ollama_chat_with_model(
+                messages,
+                fast=True,
+                model_name=HEAVY_MODEL_NAME,
+                fallback_model=HEAVY_FALLBACK_MODEL,
+            )
+        ).strip()
+    )
+    return text
 
 async def _build_campaign_brief_from_world(
     world_seed: str,
@@ -2586,12 +2966,36 @@ async def _build_world_enhancement(world_state: Dict[str, Any]) -> str:
 
 
 async def _generate_random_npc_name() -> str:
-    prompt = "Generate a random, interesting name for a fantasy character."
-    try:
-        name = await ollama_generate(prompt, fast=True)
-        return name.strip()
-    except httpx.HTTPError:
-        return "a mysterious stranger"
+    # Pure Python Entropy - No AI Hallucination or Repetition possible
+    prefixes = [
+        "Kael", "Vor", "Thar", "Syl", "Cor", "Zan", "Mel", "El", "Gra", "Mor", "Val", "Jin", "Ulf", "Xar", "Fen",
+        "Ael", "Thorn", "Storm", "Grim", "Shadow", "Light", "Dark", "Star", "Moon", "Sun", "Fire", "Ice"
+    ]
+    middles = [
+        "ar", "en", "ir", "on", "us", "a", "ia", "or", "ath", "wen", "lyn", "ax", "is", "os", "ur", "el", "in",
+    ]
+    suffixes = [
+        "thos", "ion", "ra", "ia", "or", "us", "gath", "lyn", "wen", "ax", "dore", "mir", "thra", "zar", "vyn"
+    ]
+    titles = [
+        "the Scarred", "the Wise", "Ironheart", "Shadow-walker", "of the North", "the Unseen", "Grim-eye",
+        "Storm-caller", "the Patient", "Swift-foot", "the Old", "the Young", "Black-blade", "Shield-breaker"
+    ]
+    
+    # 2 or 3 syllable construction
+    if random.random() < 0.5:
+        base = random.choice(prefixes) + random.choice(suffixes)
+    else:
+        base = random.choice(prefixes) + random.choice(middles) + random.choice(suffixes)
+        
+    # Capitalize just in case
+    name = base.capitalize()
+    
+    # 30% chance for a title
+    if random.random() < 0.3:
+        name += f" {random.choice(titles)}"
+        
+    return name
 
 async def _generate_random_location_name() -> str:
     prompt = "Generate a random, evocative name for a fantasy location."
@@ -2617,6 +3021,10 @@ async def lore_generator_loop() -> None:
                     last_user_at = datetime.fromisoformat(last_user_at_str)
                     if (datetime.utcnow() - last_user_at).total_seconds() > 1800:  # 30 minutes
                         continue
+
+                if GLOBAL_AI_BUSY:
+                    await asyncio.sleep(10)
+                    continue
 
                 world_state = ensure_world_state(session_id)
                 
@@ -2652,57 +3060,6 @@ async def lore_generator_loop() -> None:
                 logger.warning(f"Lore generator error for session {session_id}: {exc}")
 
 
-async def lore_generator_loop() -> None:
-    while True:
-        await asyncio.sleep(600)  # Generate lore every 10 minutes
-        log_clerk_event("lore_generator running")
-        for session_id in list(sessions.keys()):
-            try:
-                session = sessions.get(session_id)
-                if not session:
-                    continue
-
-                # Check if session is active
-                last_user_at_str = session.get("last_user_at")
-                if last_user_at_str:
-                    last_user_at = datetime.fromisoformat(last_user_at_str)
-                    if (datetime.utcnow() - last_user_at).total_seconds() > 1800:  # 30 minutes
-                        continue
-
-                world_state = ensure_world_state(session_id)
-                
-                # Randomly decide to generate a new NPC or Location
-                if random.random() < 0.5:
-                    # Generate NPC
-                    npc_name = "a mysterious stranger" # This can be made more dynamic
-                    new_npc = await _build_npc_details(npc_name, world_state)
-                    if new_npc:
-                        if "staged_lore" not in world_state:
-                            world_state["staged_lore"] = {}
-                        if "npcs" not in world_state["staged_lore"]:
-                            world_state["staged_lore"]["npcs"] = []
-                        world_state["staged_lore"]["npcs"].append({"name": npc_name, "description": new_npc})
-                        world_state_store[session_id] = world_state
-                        persist_world_state()
-                        log_clerk_event(f"lore_generator added NPC to session {session_id}")
-                else:
-                    # Generate Location
-                    location_name = "a hidden place" # This can be made more dynamic
-                    new_location = await _build_location_details(location_name, world_state)
-                    if new_location:
-                        if "staged_lore" not in world_state:
-                            world_state["staged_lore"] = {}
-                        if "locations" not in world_state["staged_lore"]:
-                            world_state["staged_lore"]["locations"] = []
-                        world_state["staged_lore"]["locations"].append({"name": location_name, "description": new_location})
-                        world_state_store[session_id] = world_state
-                        persist_world_state()
-                        log_clerk_event(f"lore_generator added location to session {session_id}")
-
-            except Exception as exc:
-                logger.warning(f"Lore generator error for session {session_id}: {exc}")
-
-
 async def world_enhancer_loop() -> None:
     while True:
         await asyncio.sleep(300)
@@ -2711,6 +3068,10 @@ async def world_enhancer_loop() -> None:
             try:
                 session = sessions.get(session_id)
                 if not session:
+                    continue
+
+                if GLOBAL_AI_BUSY:
+                    await asyncio.sleep(10)
                     continue
 
                 # Check if session is active
@@ -2736,8 +3097,8 @@ async def world_enhancer_loop() -> None:
 def _generate_scene_context() -> Dict[str, str]:
     days = ["Moonday", "Tovday", "Wensday", "Thorsday", "Freeday", "Starday", "Sunday"]
     times = ["Dawn", "Morning", "High Noon", "Afternoon", "Dusk", "Evening", "Midnight", "Witching Hour"]
-    crowds = ["Empty", "Sparse", "Quiet", "Moderate", "Busy", "Packed", "Overflowing"]
-    atmospheres = ["Tense", "Jovial", "Somber", "Chaotic", "Peaceful", "Eerie", "Festive", "Gloom"]
+    crowds = ["Empty", "Sparse", "Quiet", "Moderate", "Busy", "Packed", "Overflowing", "Bustling", "Hushed", "Desolate"]
+    atmospheres = ["Tense", "Jovial", "Somber", "Chaotic", "Peaceful", "Eerie", "Festive", "Gloom", "Mysterious", "Oppressive", "Electric", "Melancholic", "Whimsical", "Foreboding"]
     
     return {
         "day": random.choice(days),
@@ -2752,14 +3113,53 @@ async def _build_npc_roster(location_name: str, context: Dict[str, str], world_s
     if isinstance(campaign, dict):
         campaign_summary = str(campaign.get("summary") or "").strip()
         
+    roster = []
+    
+    # 0. Check for "Cameos" from Key NPCs
+    important_npcs = world_state.get("important_npcs", {})
+    if important_npcs:
+        # 20% chance to see a familiar face, or higher if the location matches their last known spot
+        if random.random() < 0.3: # 30% base chance for now to make it visible
+            keys = list(important_npcs.keys())
+            cameo_name = random.choice(keys)
+            cameo_npc = important_npcs[cameo_name]
+            # Add them to the scene
+            roster.append(cameo_npc)
+            # Maybe update their location? (optional, skipping for simplicity)
+    
+    # 1. Try to fetch high-quality pre-generated NPCs from the pool
+    # We want 3-5 NPCs total. Let's try to get at least 2-3 from the pool to ensure quality.
+    target_count = random.randint(3, 5)
+    
+    # Try to grab a few context-aware NPCs
+    # If the location implies a role (e.g. "Tavern" -> "Bartender"), we could pass a hint,
+    # but for now we'll take best-available deep NPCs.
+    
+    for _ in range(target_count):
+        # We can pass a hint if we parse the location_name, but generic "claim" fits most "roster" needs
+        npc = await npc_pool_manager.claim_npc() 
+        if npc:
+            roster.append(npc)
+    
+    # If we filled the roster from the pool, we are done!
+    if len(roster) >= target_count:
+        return roster
+
+    # 2. If we still need more NPCs, generate the remainder on the fly (Legacy/Fallback)
+    remaining_count = target_count - len(roster)
+    if remaining_count <= 0:
+        return roster
+
     prompt = (
-        f"Create a roster of 3-5 distinct NPCs for a setting: {location_name}.\n"
+        f"Create a roster of {remaining_count} distinct NPCs for a setting: {location_name}.\n"
         f"Context: It is {context['time']} on {context['day']}. The place is {context['crowd']} and {context['atmosphere']}.\n"
         f"Campaign Context: {campaign_summary}\n"
+        "Ensure the NPCs are distinct from one another. Avoid generic tropes (brooding rogue, grumpy dwarf) unless subverted.\n"
         "For EACH NPC, provide:\n"
         "1. Name and Role (e.g., Bartender, Patron, Spy)\n"
         "2. Appearance and Mannerism (1 sentence)\n"
         "3. Motivation (Why are they here right now?)\n"
+        "   CONSTRAINT: Personal reasons or strictly tied to Campaign Context. Do NOT invent new wars/factions.\n"
         "4. Secret (Something they won't reveal without a bribe or high trust)\n"
         "5. Relationships (One connection to another NPC in this list, and thoughts on the Player if applicable)\n"
         "6. Disposition Score (A number from 2 to 12. 2=Hostile, 7=Neutral, 12=Friendly)\n"
@@ -2784,8 +3184,11 @@ async def _build_npc_roster(location_name: str, context: Dict[str, str], world_s
         # Attempt to parse JSON from the response
         json_match = re.search(r"\[.*\]", raw, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group(0))
-        return []
+            new_npcs = json.loads(json_match.group(0))
+            if isinstance(new_npcs, list):
+                roster.extend(new_npcs)
+            return roster
+        return roster
     except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
         logger.warning(f"NPC generation failed for {location_name}: {e}")
         return []
@@ -2965,20 +3368,17 @@ async def generate_intro_story(
     if isinstance(campaign, dict):
         campaign_summary = str(campaign.get("summary") or "").strip()
     
-    settings = [
-        "a sunless citadel", "a flooded mine", "a ruined watchtower", "a cursed forest",
-        "a mountain pass", "an ancient crypt", "a sewers network", "a frozen wasteland",
-        "a crumbling temple", "a fog-shrouded swamp"
-    ]
-    setting = random.choice(settings)
+    # Dynamic setting selection based on class
+    klass_lower = klass.lower().strip() if klass else ""
     
+    # Dynamic generation - No pre-canned settings
     prompt = (
-        f"Write an opening scene for a dungeon crawl set in {setting} (exactly 2 sentences). "
-        "Make it vivid and specific with a clear hook, then end with a direct question. "
-        "Include a hint of danger and wonder. "
-        + identity
-        + (" Campaign brief: " + campaign_summary if campaign_summary else "")
-        + " Avoid cliche tavern starts."
+        f"Based on the Campaign Context below, invent a unique, dangerous starting location appropriate for a {klass}. "
+        f"The protagonist is {identity}. "
+        f"Campaign Context: {campaign_summary or 'A dark fantasy realm of danger and mystery.'}\n\n"
+        "The scene must start IN MEDIA RES—something is already happening (a pursuit, a discovery, an ambush, a social standoff). "
+        "Describe the immediate physical sensation or danger relevant to their class (e.g., a Rogue feeling for a trap, a Wizard sensing magic). "
+        "Keep it under 3 sentences. End with a provocative question that demands action."
     ).strip()
     messages = [
         {"role": "system", "content": build_story_system_prompt(state, world_state)},
@@ -2988,9 +3388,9 @@ async def generate_intro_story(
         (
             await ollama_chat_with_model(
                 messages,
-                fast=True,
-                model_name=CLERK_MODEL_NAME,
-                fallback_model=CLERK_FALLBACK_MODEL,
+                fast=False,
+                model_name=HEAVY_MODEL_NAME,
+                fallback_model=HEAVY_FALLBACK_MODEL,
             )
         ).strip()
     )
@@ -2999,9 +3399,9 @@ async def generate_intro_story(
             (
                 await ollama_chat_with_model(
                     build_retry_messages(messages),
-                    fast=True,
-                    model_name=CLERK_MODEL_NAME,
-                    fallback_model=CLERK_FALLBACK_MODEL,
+                    fast=False,
+                    model_name=HEAVY_MODEL_NAME,
+                    fallback_model=HEAVY_FALLBACK_MODEL,
                 )
             ).strip()
         )
@@ -3018,8 +3418,13 @@ async def generate_intro_story(
         state["narration_hint"] = hint
     if retry:
         return strip_state_leaks(retry, state, world_state)
-    log_clerk_event("intro_story empty fallback")
-    return pick_intro_fallback()
+    if retry:
+        return strip_state_leaks(retry, state, world_state)
+    
+    # Final desperate attempt - just ask the heavy model one last time without constraints
+    # User prefers waiting over generic text.
+    final_try = await ollama_chat_with_model(messages, fast=False, model_name=HEAVY_MODEL_NAME, fallback_model=HEAVY_FALLBACK_MODEL)
+    return strip_state_leaks(final_try, state, world_state)
 
 async def generate_clerk_intro_fast(
     state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str
@@ -3061,33 +3466,18 @@ async def generate_clerk_intro_fast(
             ).strip()
         )
     except asyncio.TimeoutError:
-        text = ""
+        # If fast fails, escalate to the Heavy/Full intro generator which has no timeout
+        return await generate_intro_story(state, world_state, name, klass)
+
     text, hint = split_narration_hint(text)
     if hint:
         state["narration_hint"] = hint
     if text:
         return strip_state_leaks(text, state, world_state)
-    # fallback to deterministic intro
-    identity = ""
-    if name and klass:
-        identity = f"{name}, the {klass}, "
-    elif name:
-        identity = f"{name} "
-    elif klass:
-        identity = f"The {klass} "
-    campaign = world_state.get("campaign") if isinstance(world_state, dict) else {}
-    summary = ""
-    if isinstance(campaign, dict):
-        summary = str(campaign.get("summary") or "").strip()
-    if not summary:
-        summary = DEFAULT_CAMPAIGN_BRIEF
-    parts = [part.strip() for part in summary.split(".") if part.strip()]
-    seed = parts[0] if parts else summary
-    seed = seed.rstrip(". ")
-    lead = f"{seed} {identity}steps into the trouble promised by the campaign's opening.".strip()
-    if not lead.endswith("."):
-        lead = f"{lead}."
-    return f"{lead} What do you do?"
+    
+    # If text is empty, escalate
+    return await generate_intro_story(state, world_state, name, klass)
+# Consolidate duplicate generate_intro_story
 
 async def generate_narrator_intro_followup(
     state: Dict[str, Any], world_state: Dict[str, Any], name: str, klass: str, base_intro: str
@@ -3140,42 +3530,8 @@ def build_campaign_intro_fallback(
         return f"{seed}. {opener} {question}"
     return f"{opener} {question}"
 
-def fallback_reply(messages: List[Dict[str, str]]) -> str:
-    variations = [
-        "A cold draft sweeps the corridor. What do you do next?",
-        "Somewhere ahead, a chain rattles. How do you respond?",
-        "The air smells of damp stone and old smoke. Your move?",
-    ]
-    return random.choice(variations)
-
-INTRO_FALLBACKS_PATH = Path(__file__).resolve().parent / "intro_fallbacks.json"
-INTRO_FALLBACKS_DEFAULT = [
-    "A rusted gate groans at the mouth of a collapsed crypt. A lone lantern flickers as if waiting. Do you enter or scout?",
-    "Rain drums hard beside a stairwell of wet stone. A faint blue glow leaks from a seam. Do you touch it or back away?",
-    "The ground trembles over a pit that exhales warm air. Fresh footprints vanish into the dark. Do you follow or listen?",
-    "A cracked bell tolls once under a ceiling of cracked tiles. The air smells of iron and smoke. Do you descend or search?",
-    "Cold wind pushes through a tunnel lined with broken banners. A soft scraping answers your step. Do you press on or hold?",
-]
-
-def load_intro_fallbacks() -> List[str]:
-    try:
-        raw = INTRO_FALLBACKS_PATH.read_text(encoding="ascii")
-        data = json.loads(raw)
-        if isinstance(data, list):
-            cleaned = [str(item).strip() for item in data if str(item).strip()]
-            if cleaned:
-                return cleaned
-    except Exception:
-        logger.exception("Failed to load intro fallbacks")
-    return INTRO_FALLBACKS_DEFAULT
-
-INTRO_FALLBACKS = load_intro_fallbacks()
-
-def pick_intro_fallback() -> str:
-    return random.choice(INTRO_FALLBACKS or INTRO_FALLBACKS_DEFAULT)
-
 def should_use_heavy_model(
-    state: Dict[str, Any], world_updates: List[str], story_input: str
+    state: Dict[str, Any], world_state: Dict[str, Any], world_updates: List[str], story_input: str
 ) -> bool:
     if state.get("pending_encounter"):
         return True
@@ -3184,6 +3540,20 @@ def should_use_heavy_model(
             return True
     if "an encounter begins" in str(story_input).lower():
         return True
+        
+    # Check for Key NPCs in the current location
+    loc_name = state.get("location", "")
+    if loc_name and world_state:
+        locations = world_state.get("locations", {})
+        loc_data = locations.get(loc_name, {})
+        if isinstance(loc_data, dict):
+            roster = loc_data.get("npcs", [])
+            important_npcs = world_state.get("important_npcs", {})
+            # If any NPC in the roster is a Key NPC, use heavy model
+            for npc in roster:
+                if isinstance(npc, dict) and npc.get("name") in important_npcs:
+                    return True
+                    
     return False
 
 def count_words(text: str) -> int:
@@ -3244,43 +3614,18 @@ async def generate_min_response(
     model_name: Optional[str] = None,
     fallback_model: Optional[str] = None,
 ) -> str:
+    """
+    Generate a response using a single call, trusting the model to be thorough.
+    The 'min_words' hint is now just a label; we rely on the prompt to encourage length.
+    """
     model = model_name or MODEL_NAME
     fallback = fallback_model or (FALLBACK_MODEL_NAME if model == MODEL_NAME else model)
+    
+    # We trust the heavy model to just do it right the first time.
     response_text = strip_thoughts(
         (await ollama_chat_with_model(messages, fast, model_name=model, fallback_model=fallback)).strip()
     )
-    if count_words(response_text) >= min_words:
-        if ends_with_sentence(response_text):
-            return response_text
-        continuation = strip_thoughts(
-            (
-                await ollama_chat_with_model(
-                    build_continue_messages(messages),
-                    fast,
-                    model_name=model,
-                    fallback_model=fallback,
-                )
-            ).strip()
-        )
-        if continuation:
-            return (response_text + " " + continuation).strip()
-        return response_text
-    retry_text = strip_thoughts(
-        (
-            await ollama_chat_with_model(
-                build_continue_messages(messages),
-                fast,
-                model_name=model,
-                fallback_model=fallback,
-            )
-        ).strip()
-    )
-    if retry_text:
-        combined = (response_text + " " + retry_text).strip()
-        if count_words(combined) >= min_words:
-            return combined
-        if count_words(retry_text) >= min_words:
-            return retry_text
+    
     if response_text:
         return response_text
     return fallback_reply(messages)
@@ -3367,41 +3712,91 @@ async def stream_response(
                         continue
                 cleaned = cleaned.replace("</think>", "").replace("<think>", "")
                 if cleaned:
-                    if not prefix_checked:
-                        buffer += cleaned
-                        if len(buffer) > 25:
-                            stripped = strip_prefixes(buffer)
-                            prefix_checked = True
-                            if stripped:
-                                assistant_parts.append(stripped)
-                                data = json.dumps({"delta": stripped})
-                                yield f"data: {data}\n\n"
-                            buffer = ""
-                    else:
-                        assistant_parts.append(cleaned)
-                        data = json.dumps({"delta": cleaned})
-                        yield f"data: {data}\n\n"
+                    # Buffer content to handle line-based filtering (for NARRATION_HINT)
+                    buffer += cleaned
+                    
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        if "narration_hint" in line.lower():
+                            continue # Skip hint lines
+                            
+                        # Handle prefix stripping only on the very first valid line
+                        if not prefix_checked:
+                             if len(line.strip()) > 0:
+                                 stripped = strip_prefixes(line)
+                                 prefix_checked = True
+                                 if stripped:
+                                     assistant_parts.append(stripped + "\n")
+                                     data = json.dumps({"delta": stripped + "\n"})
+                                     yield f"data: {data}\n\n"
+                        else:
+                            assistant_parts.append(line + "\n")
+                            data = json.dumps({"delta": line + "\n"})
+                            yield f"data: {data}\n\n"
+                            
+                    # Partial Flush (if safe)
+                    if buffer:
+                        # Only hold if it looks like it might be a hint
+                        lower_buf = buffer.lower()
+                        potential_hint = "narration_hint"
+                        
+                        # Is buffer a prefix of "narration_hint" (or "[narration_hint")?
+                        is_hint_prefix = False
+                        if potential_hint.startswith(lower_buf) or "[narration_hint".startswith(lower_buf):
+                            is_hint_prefix = True
+                        elif lower_buf.startswith(potential_hint) or lower_buf.startswith("[narration_hint"):
+                            is_hint_prefix = True
+                            
+                        # If it's short and matches prefix, hold.
+                        # If it's long and doesn't contain hint, flush.
+                        should_hold = is_hint_prefix and len(buffer) < 25
+                        
+                        if not should_hold:
+                             if not prefix_checked:
+                                  if len(buffer) > 25: # Wait for enough content to strip prefix safely
+                                      stripped = strip_prefixes(buffer)
+                                      prefix_checked = True
+                                      if stripped:
+                                          assistant_parts.append(stripped)
+                                          data = json.dumps({"delta": stripped})
+                                          yield f"data: {data}\n\n"
+                                      buffer = ""
+                             else:
+                                  assistant_parts.append(buffer)
+                                  data = json.dumps({"delta": buffer})
+                                  yield f"data: {data}\n\n"
+                                  buffer = ""
         except httpx.HTTPError as exc:
             data = json.dumps({"error": f"Ollama error: {exc}"})
             yield f"data: {data}\n\n"
             return
             
         # Flush any remaining buffer if we never hit the threshold
-        if not prefix_checked and buffer:
-             stripped = strip_prefixes(buffer)
-             if stripped:
-                 assistant_parts.append(stripped)
-                 data = json.dumps({"delta": stripped})
-                 yield f"data: {data}\n\n"
-                 
+        # Flush any remaining buffer if we never hit the threshold
+        if buffer and "narration_hint" not in buffer.lower():
+             if not prefix_checked:
+                  stripped = strip_prefixes(buffer)
+                  if stripped:
+                      assistant_parts.append(stripped)
+                      data = json.dumps({"delta": stripped})
+                      yield f"data: {data}\n\n"
+             else:
+                  assistant_parts.append(buffer)
+                  data = json.dumps({"delta": buffer})
+                  yield f"data: {data}\n\n"
+                  
         response_text = "".join(assistant_parts).strip()
         response_text = strip_thoughts(response_text)
         if count_words(response_text) < (18 if fast else 28):
-            response_text = await generate_min_response(
+            extension = await generate_min_response(
                 session["messages"], fast, 18 if fast else 28
             )
-            data = json.dumps({"delta": response_text})
-            yield f"data: {data}\n\n"
+            # Ensure extension doesn't leak hints
+            extension, _ = split_narration_hint(extension)
+            if extension:
+                response_text = extension # Logic dictates this replaces/extends? Keeping existing behavior.
+                data = json.dumps({"delta": extension})
+                yield f"data: {data}\n\n"
         last_assistant = get_last_assistant_message(session["messages"])
         if last_assistant and response_text.strip() == last_assistant.strip():
             retry_context = build_avoid_repeat_messages(without_last_assistant(session["messages"]))
@@ -3865,120 +4260,117 @@ async def send_message(
     payload: SendMessageRequest,
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    session = get_session_or_404(session_id)
-    if user.get("credits", 0) <= 0:
-        raise HTTPException(status_code=402, detail="Out of credits")
-    ensure_session_state(session)
-    session["pending_reply"] = True
-    session["last_user_at"] = stamp_now()
-    fast = bool(payload.fast)
-    world_state = ensure_world_state(session_id)
+    global GLOBAL_AI_BUSY
+    GLOBAL_AI_BUSY = True
+    npc_pool_manager.set_narration_active(True)
     try:
-        clerk_result = await clerk_update_state(
-            session["game_state"], world_state, payload.message, session_id=session_id
-        )
-        session["game_state"] = clerk_result["state"]
-        world_state = clerk_result.get("world_state") or world_state
-        world_state = apply_world_updates(world_state, clerk_result.get("world_updates") or [])
-        world_summary = str(clerk_result.get("world_summary") or "").strip()
-        if world_summary:
-            world_state["summary"] = world_summary
-            world_state["updated_at"] = stamp_now()
-        world_state_store[session_id] = world_state
-        persist_world_state()
-        story_input = clerk_result["story_input"]
-    except httpx.HTTPError as exc:
-        logger.warning("Clerk model failed: %s", exc)
-        clerk_result = {
-            "should_narrate": True,
-            "player_reply": "Noted.",
-        }
-        story_input = payload.message
-    session["messages"].append({"role": "user", "content": story_input})
-    try:
-        response_parts = None
-        action_type = str(clerk_result.get("action_type") or "").strip().lower()
-        force_narrate = last_assistant_asked_question(session["messages"])
-        should_narrate = action_type != "equip"
-        if action_type != "equip":
-            should_narrate = should_narrate or force_narrate
-        if not should_narrate:
-            response_text = clerk_result.get("player_reply") or "Noted."
-        else:
-            use_heavy = should_use_heavy_model(
-                session["game_state"],
-                clerk_result.get("world_updates") or [],
-                story_input,
+        session = get_session_or_404(session_id)
+        if user.get("credits", 0) <= 0:
+            raise HTTPException(status_code=402, detail="Out of credits")
+        ensure_session_state(session)
+        session["pending_reply"] = True
+        session["last_user_at"] = stamp_now()
+        fast = bool(payload.fast)
+        world_state = ensure_world_state(session_id)
+        try:
+            last_narrative = session.get("last_assistant_message", "")
+            clerk_result = await clerk_update_state(
+                session["game_state"], world_state, payload.message, last_narrative=last_narrative, session_id=session_id
             )
-            model_name = HEAVY_MODEL_NAME if use_heavy else MODEL_NAME
-            fallback_model = HEAVY_FALLBACK_MODEL if use_heavy else FALLBACK_MODEL_NAME
-            history = [msg for msg in session["messages"] if msg.get("role") != "system"]
-            tail = get_last_turn_messages(history)
-            model_messages = [
-                {
-                    "role": "system",
-                    "content": build_story_system_prompt(session["game_state"], world_state),
-                },
-                *tail,
-                {"role": "user", "content": story_input},
-            ]
-            response_text = await generate_min_response(
-                model_messages,
-                fast,
-                28,
-                model_name=model_name,
-                fallback_model=fallback_model,
-            )
-            last_assistant = get_last_assistant_message(session["messages"])
-            if last_assistant and response_text.strip() == last_assistant.strip():
-                retry_context = build_avoid_repeat_messages(without_last_assistant(model_messages))
+            session["game_state"] = clerk_result["state"]
+            world_state = clerk_result.get("world_state") or world_state
+            world_state = apply_world_updates(world_state, clerk_result.get("world_updates") or [])
+            world_summary = str(clerk_result.get("world_summary") or "").strip()
+            if world_summary:
+                world_state["summary"] = world_summary
+                world_state["updated_at"] = stamp_now()
+            world_state_store[session_id] = world_state
+            persist_world_state()
+            story_input = clerk_result["story_input"]
+        except httpx.HTTPError as exc:
+            logger.warning("Clerk model failed: %s", exc)
+            clerk_result = {
+                "should_narrate": True,
+                "player_reply": "Noted.",
+            }
+            story_input = payload.message
+        session["messages"].append({"role": "user", "content": story_input})
+        try:
+            response_parts = None
+            action_type = str(clerk_result.get("action_type") or "").strip().lower()
+            force_narrate = last_assistant_asked_question(session["messages"])
+            should_narrate = action_type != "equip"
+            if action_type != "equip":
+                should_narrate = should_narrate or force_narrate
+            if not should_narrate:
+                response_text = clerk_result.get("player_reply") or "Noted."
+            else:
+                # If client is willing to wait (fast=False), ALWAYS use heavy model for quality
+                use_heavy = should_use_heavy_model(
+                    session["game_state"],
+                    world_state,
+                    clerk_result.get("world_updates") or [],
+                    story_input,
+                )
+                if not fast:
+                    use_heavy = True
+
+                model_name = HEAVY_MODEL_NAME if use_heavy else MODEL_NAME
+                fallback_model = HEAVY_FALLBACK_MODEL if use_heavy else FALLBACK_MODEL_NAME
+                history = [msg for msg in session["messages"] if msg.get("role") != "system"]
+                tail = get_last_turn_messages(history)
+                model_messages = [
+                    {
+                        "role": "system",
+                        "content": build_story_system_prompt(session["game_state"], world_state),
+                    },
+                    *tail,
+                    {"role": "user", "content": story_input},
+                ]
+                
+                # Increase min_words for heavy/slow mode to avoid one-liners
+                target_min_words = 60 if use_heavy else 28
+                
                 response_text = await generate_min_response(
-                    retry_context,
+                    model_messages,
                     fast,
-                    28,
+                    target_min_words,
                     model_name=model_name,
                     fallback_model=fallback_model,
                 )
-                if response_text.strip() == last_assistant.strip():
-                    response_text = fallback_reply(model_messages)
-            if response_text and not ends_with_sentence(response_text):
-                continuation = await generate_min_response(
-                    build_continue_messages(model_messages),
-                    fast,
-                    14,
-                    model_name=model_name,
-                    fallback_model=fallback_model,
-                )
-                if continuation:
-                    response_parts = [response_text, continuation]
-            if response_parts:
-                cleaned_parts = []
-                for part in response_parts:
-                    cleaned_part = await clerk_filter_story(
-                        session["game_state"], world_state, part
+                # Removed redundant repetition checks and sentence completion loops
+                # to drastically improve latency ("One Shot" philosophy).
+                if response_parts:
+                    cleaned_parts = []
+                    for part in response_parts:
+                        cleaned_part = await clerk_filter_story(
+                            session["game_state"], world_state, part
+                        )
+                        cleaned_part = strip_state_leaks(
+                            cleaned_part, session["game_state"], world_state
+                        )
+                        if cleaned_part:
+                            cleaned_parts.append(cleaned_part)
+                    if cleaned_parts:
+                        response_parts = cleaned_parts
+                        response_text = cleaned_parts[0]
+                    else:
+                        response_parts = None
+                if not response_parts:
+                    # Strip narrator artifacts and regular leaks
+                    response_text, _ = split_narration_hint(response_text)
+                    response_text = strip_prefixes(response_text)
+                    response_text = strip_state_leaks(
+                        response_text, session["game_state"], world_state
                     )
-                    cleaned_part = strip_state_leaks(
-                        cleaned_part, session["game_state"], world_state
-                    )
-                    if cleaned_part:
-                        cleaned_parts.append(cleaned_part)
-                if cleaned_parts:
-                    response_parts = cleaned_parts
-                    response_text = cleaned_parts[0]
-                else:
-                    response_parts = None
-            if not response_parts:
-                response_text = await clerk_filter_story(
-                    session["game_state"], world_state, response_text
-                )
-                response_text = strip_state_leaks(
-                    response_text, session["game_state"], world_state
-                )
-    except httpx.TimeoutException:
-        response_text = fallback_reply(session["messages"])
-        logger.warning("Ollama timeout for session %s", session_id)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Ollama error: {exc}") from exc
+        except httpx.TimeoutException:
+            response_text = fallback_reply(session["messages"])
+            logger.warning("Ollama timeout for session %s", session_id)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Ollama error: {exc}") from exc
+    finally:
+        GLOBAL_AI_BUSY = False
+        npc_pool_manager.set_narration_active(False)
     response_parts = response_parts if "response_parts" in locals() else None
     if response_parts:
         for part in response_parts:
@@ -4000,40 +4392,10 @@ async def send_message(
     if should_narrate and session["game_state"].get("loot_pending"):
         session["game_state"]["loot_pending"] = []
     encounter_payload = session.get("game_state", {}).get("pending_encounter")
-        # CLERK EXTRACTION
-        if response_text and len(response_text) > 20:
-            extracted = await clerk_extract_state_from_narration(session["game_state"], world_state, response_text)
-            if extracted:
-                new_items = extracted.get("new_items", [])
-                lost_items = extracted.get("lost_items", [])
-                inventory = session["game_state"].get("inventory", [])
-                
-                # Add new items
-                for item in new_items:
-                    if item and item not in inventory:
-                        inventory.append(item)
-                        # Minimal notification to system, no spam
-                        # session["messages"].append({"role": "system", "content": f"Added to inventory: {item}"})
-
-                # Remove lost items
-                for item in lost_items:
-                     if item in inventory:
-                        inventory.remove(item)
-
-                session["game_state"]["inventory"] = inventory
-                
-                # Append to response parts if they exist, or text
-                note = ""
-                if new_items:
-                    note += f"\n*Obtained: {', '.join(new_items)}*"
-                if lost_items:
-                    note += f"\n*Lost: {', '.join(lost_items)}*"
-                
-                if note:
-                    if response_parts:
-                        response_parts.append(note.strip())
-                    else:
-                        response_text += "\n" + note
+    
+    # Removed heavy post-generation extraction (saves ~5-8s)
+    # clerk_update_state at the start of the request handles most item updates.
+    # We rely on that for now to meet latency targets.
                         
     session["pending_reply"] = False
     session["last_assistant_at"] = stamp_now()
@@ -4079,42 +4441,27 @@ async def continue_message(
         continue_messages = build_continue_messages(build_avoid_repeat_messages(model_messages))
         use_heavy = should_use_heavy_model(
             session["game_state"],
+            world_state,
             [],
             "",
         )
         model_name = HEAVY_MODEL_NAME if use_heavy else MODEL_NAME
         fallback_model = HEAVY_FALLBACK_MODEL if use_heavy else FALLBACK_MODEL_NAME
+        
+        # Single-shot generation call
         response_text = await generate_min_response(
             continue_messages,
             fast,
-            28,
+            30,
             model_name=model_name,
             fallback_model=fallback_model,
         )
-        last_assistant = get_last_assistant_message(session["messages"])
-        if last_assistant and response_text.strip() == last_assistant.strip():
-            retry_context = build_avoid_repeat_messages(without_last_assistant(model_messages))
-            response_text = await generate_min_response(
-                build_continue_messages(retry_context),
-                fast,
-                28,
-                model_name=model_name,
-                fallback_model=fallback_model,
-            )
-            if response_text.strip() == last_assistant.strip():
-                response_text = fallback_reply(model_messages)
-        if response_text and not ends_with_sentence(response_text):
-            continuation = await generate_min_response(
-                build_continue_messages(model_messages),
-                fast,
-                14,
-                model_name=model_name,
-                fallback_model=fallback_model,
-            )
-            if continuation:
-                response_text = (response_text + " " + continuation).strip()
+        
+        # Removed redundancy checks (repetition, sentence ending) for speed.
         if response_text:
-            response_text = await clerk_filter_story(session["game_state"], world_state, response_text)
+            # Strip narrator artifacts and regular leaks
+            response_text, _ = split_narration_hint(response_text)
+            response_text = strip_prefixes(response_text)
             response_text = strip_state_leaks(response_text, session["game_state"], world_state)
     except httpx.TimeoutException:
         response_text = fallback_reply(session["messages"])
@@ -4225,7 +4572,7 @@ async def generate_intro(payload: IntroRequest, user: Dict[str, Any] = Depends(r
             time.monotonic() - start_time,
             exc,
         )
-    return IntroResponse(intro=pick_intro_fallback())
+    return IntroResponse(intro="The mists of creation swirl, but no clear path emerges. (AI Generation Failed)")
 
 @app.post(
     "/api/sessions/{session_id}/intro",
@@ -4271,7 +4618,11 @@ async def generate_session_intro(
             intro = ""
         if not intro:
             log_clerk_event("intro_request empty story fallback")
-            intro = pick_intro_fallback()
+            intro = "The adventure begins in silence. What do you do?"
+
+        # --- CLERK FILTERING (Avoid Leaks) ---
+        intro = await clerk_filter_story(session["game_state"], world_state, intro)
+        intro = strip_state_leaks(intro, session["game_state"], world_state)
         session["messages"].append({"role": "assistant", "content": intro})
         session["last_assistant_at"] = stamp_now()
         session["last_assistant_message"] = intro
@@ -4290,6 +4641,9 @@ async def generate_session_intro(
 
         async def _background_intro_followup() -> None:
             try:
+                if GLOBAL_AI_BUSY:
+                     await asyncio.sleep(5)
+
                 updated_world = await ensure_campaign_brief(
                     session["game_state"],
                     world_state,

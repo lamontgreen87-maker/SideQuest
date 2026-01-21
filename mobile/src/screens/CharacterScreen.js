@@ -141,7 +141,6 @@ export default function CharacterScreen({
   const [formRace, setFormRace] = useState(RACES[0]);
   const [formBackground, setFormBackground] = useState(BACKGROUNDS[0]);
   const [formAlignment, setFormAlignment] = useState(ALIGNMENTS[0]);
-  const [formGender, setFormGender] = useState("Male");
   const [formBackstory, setFormBackstory] = useState("");
   const [formStats, setFormStats] = useState(() => ({ ...DEFAULT_STATS }));
   const [formArmorClass, setFormArmorClass] = useState("10");
@@ -386,7 +385,6 @@ export default function CharacterScreen({
         race: formRace,
         background: formBackground,
         alignment: formAlignment,
-        gender: formGender,
         backstory: formBackstory,
         traits: parseList(formTraits),
         languages: parseList(formLanguages),
@@ -411,7 +409,6 @@ export default function CharacterScreen({
       setFormRace(RACES[0]);
       setFormBackground(BACKGROUNDS[0]);
       setFormAlignment(ALIGNMENTS[0]);
-      setFormGender("Male");
       setFormBackstory("");
       setFormStats({ ...DEFAULT_STATS });
       setFormArmorClass("10");
@@ -470,7 +467,6 @@ export default function CharacterScreen({
     formRace,
     formBackground,
     formAlignment,
-    formGender,
     formBackstory,
     formSpellcastingAbility,
     formItems,
@@ -496,34 +492,6 @@ export default function CharacterScreen({
           placeholder="Character Name"
           placeholderTextColor={theme.colors.textSecondary}
         />
-<<<<<<< HEAD
-        <View style={styles.infoRow}>
-          <TextInput
-            style={[styles.formInput, styles.smallInput]}
-            value={formLevel}
-            onChangeText={(value) => setFormLevel(value.replace(/[^0-9]/g, ""))}
-            placeholder="Level"
-            placeholderTextColor={colors.mutedGold}
-            keyboardType="numeric"
-          />
-          <View style={styles.proficiencyCard}>
-            <Text style={styles.statLabelSmall}>Proficiency</Text>
-            <Text style={styles.statValue}>+{proficiencyBonus}</Text>
-          </View>
-        </View>
-        <View style={styles.selectorGroup}>
-          <View style={styles.selectorRow}>
-            {CLASSES.map((klass) => (
-              <Pressable
-                key={klass}
-                onPress={() => setFormClass(klass)}
-                style={[
-                  styles.selector,
-                  formClass === klass && styles.selectorActive,
-                ]}
-              >
-                <Text style={styles.selectorText}>{klass}</Text>
-=======
         <View style={styles.selectorGroup}>
           <View style={styles.selectorRow}>
             {GENDERS.map((gender) => (
@@ -536,25 +504,10 @@ export default function CharacterScreen({
                 ]}
               >
                 <Text style={styles.selectorText}>{gender}</Text>
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
               </Pressable>
             ))}
           </View>
         </View>
-<<<<<<< HEAD
-        <View style={styles.selectorGroup}>
-          <View style={styles.selectorRow}>
-            {RACES.map((race) => (
-              <Pressable
-                key={race}
-                onPress={() => setFormRace(race)}
-                style={[
-                  styles.selector,
-                  formRace === race && styles.selectorActive,
-                ]}
-              >
-                <Text style={styles.selectorText}>{race}</Text>
-=======
         <View style={styles.infoRow}>
           <TextInput
             style={[styles.formInput, styles.smallInput]}
@@ -581,15 +534,12 @@ export default function CharacterScreen({
                 ]}
               >
                 <Text style={styles.selectorText}>{klass}</Text>
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
               </Pressable>
             ))}
           </View>
         </View>
         <View style={styles.selectorGroup}>
           <View style={styles.selectorRow}>
-<<<<<<< HEAD
-=======
             {RACES.map((race) => (
               <Pressable
                 key={race}
@@ -606,7 +556,6 @@ export default function CharacterScreen({
         </View>
         <View style={styles.selectorGroup}>
           <View style={styles.selectorRow}>
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
             {BACKGROUNDS.map((background) => (
               <Pressable
                 key={background}
@@ -640,8 +589,6 @@ export default function CharacterScreen({
             ))}
           </View>
         </View>
-<<<<<<< HEAD
-=======
         <View style={styles.statActions}>
           <Pressable style={styles.actionButton} onPress={optimizeStats}>
             <Text style={styles.actionButtonText}>🚀 Optimize for Class</Text>
@@ -650,7 +597,6 @@ export default function CharacterScreen({
             <Text style={styles.actionButtonText}>🎲 Roll Stats (4d6)</Text>
           </Pressable>
         </View>
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
         <View style={styles.statGrid}>
           {Object.entries(formStats).map(([key, value]) => {
             const score = Number(value) || 10;
@@ -740,11 +686,7 @@ export default function CharacterScreen({
           value={formSpellcastingAbility}
           onChangeText={setFormSpellcastingAbility}
           placeholder="Spellcasting ability (e.g. wis)"
-<<<<<<< HEAD
-          placeholderTextColor={colors.mutedGold}
-=======
           placeholderTextColor={theme.colors.textSecondary}
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
         />
         {classCantrips.length ? (
           <View style={styles.spellGroup}>
@@ -817,11 +759,7 @@ export default function CharacterScreen({
           value={formItems}
           onChangeText={setFormItems}
           placeholder="Inventory / Items"
-<<<<<<< HEAD
-          placeholderTextColor={colors.mutedGold}
-=======
           placeholderTextColor={theme.colors.textSecondary}
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
           multiline
         />
         <TextInput
@@ -829,11 +767,7 @@ export default function CharacterScreen({
           value={formTraits}
           onChangeText={setFormTraits}
           placeholder="Traits / Feats"
-<<<<<<< HEAD
-          placeholderTextColor={colors.mutedGold}
-=======
           placeholderTextColor={theme.colors.textSecondary}
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
           multiline
         />
         <TextInput
@@ -841,41 +775,18 @@ export default function CharacterScreen({
           value={formLanguages}
           onChangeText={setFormLanguages}
           placeholder="Languages"
-<<<<<<< HEAD
-          placeholderTextColor={colors.mutedGold}
+          placeholderTextColor={theme.colors.textSecondary}
           multiline
         />
-        <Text style={[styles.statLabelSmall, styles.sectionLabel]}>
-          Gender
-        </Text>
-        <View style={styles.selectorRow}>
-          {GENDERS.map((gender) => (
-            <Pressable
-              key={gender}
-              onPress={() => setFormGender(gender)}
-              style={[
-                styles.selector,
-                formGender === gender && styles.selectorActive,
-              ]}
-            >
-              <Text style={styles.selectorText}>{gender}</Text>
-            </Pressable>
-          ))}
-        </View>
         <TextInput
           style={[styles.formInput, styles.multilineInput, styles.backstoryInput]}
           value={formBackstory}
           onChangeText={setFormBackstory}
           placeholder="Backstory (optional - AI will generate one if left empty)"
-          placeholderTextColor={colors.mutedGold}
+          placeholderTextColor={theme.colors.textSecondary}
           multiline
           numberOfLines={4}
         />
-=======
-          placeholderTextColor={theme.colors.textSecondary}
-          multiline
-        />
->>>>>>> 103d520eb5d4a39c7d419f2ad707fe2460c9f9e9
         <Button
           label={createBusy ? "..." : "Create Character"}
           onPress={handleCreateCharacter}
@@ -1157,10 +1068,3 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
   },
 });
-
-
-
-
-
-
-

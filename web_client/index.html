@@ -494,6 +494,22 @@
             border-color: rgba(0, 229, 255, 0.2);
         }
 
+        .stat-badge {
+            display: inline-flex;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            margin-right: 0.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .stat-badge i {
+            margin-right: 0.3rem;
+            font-style: normal;
+        }
+
         /* --- Thinking Indicator --- */
         .thinking-indicator {
             display: none;
@@ -839,13 +855,32 @@
                     <div class="section-title">Step 2: Ability Scores</div>
                     <div
                         style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem;">
-                        <div class="stat-box"><label>STR</label><input type="number" id="stat-str" value="10"></div>
-                        <div class="stat-box"><label>DEX</label><input type="number" id="stat-dex" value="10"></div>
-                        <div class="stat-box"><label>CON</label><input type="number" id="stat-con" value="10"></div>
-                        <div class="stat-box"><label>INT</label><input type="number" id="stat-int" value="10"></div>
-                        <div class="stat-box"><label>WIS</label><input type="number" id="stat-wis" value="10"></div>
-                        <div class="stat-box"><label>CHA</label><input type="number" id="stat-cha" value="10"></div>
+                        <div class="stat-box"><label>STR</label><input type="number" id="stat-str" value="10"
+                                onchange="updateCalculatedStats()"></div>
+                        <div class="stat-box"><label>DEX</label><input type="number" id="stat-dex" value="10"
+                                onchange="updateCalculatedStats()"></div>
+                        <div class="stat-box"><label>CON</label><input type="number" id="stat-con" value="10"
+                                onchange="updateCalculatedStats()"></div>
+                        <div class="stat-box"><label>INT</label><input type="number" id="stat-int" value="10"
+                                onchange="updateCalculatedStats()"></div>
+                        <div class="stat-box"><label>WIS</label><input type="number" id="stat-wis" value="10"
+                                onchange="updateCalculatedStats()"></div>
+                        <div class="stat-box"><label>CHA</label><input type="number" id="stat-cha" value="10"
+                                onchange="updateCalculatedStats()"></div>
                     </div>
+
+                    <div class="section-title">Derived Stats</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+                        <div class="input-group">
+                            <label>🛡️ Armor Class (AC)</label>
+                            <input type="number" id="char-ac" value="10">
+                        </div>
+                        <div class="input-group">
+                            <label>❤️ Health Points (HP)</label>
+                            <input type="number" id="char-hp" value="10">
+                        </div>
+                    </div>
+
                     <div style="text-align:center; margin-bottom: 2rem;">
                         <button class="btn secondary" onclick="rollStats()">🎲 Roll Stats (4d6)</button>
                     </div>
@@ -912,9 +947,12 @@
         <div id="view-game" class="screen">
             <div id="chat-header">
                 <div>
-                    <h3 id="game-char-name">Character Name</h3>
+                    <h3 id="game-char-name" style="margin-bottom: 0.3rem;">Character Name</h3>
+                    <div id="game-stats" style="margin-bottom: 0.5rem;">
+                        <!-- Badges injected -->
+                    </div>
                     <span id="game-session-id"
-                        style="font-size: 0.8rem; color: #666; font-family: monospace;">UUID</span>
+                        style="font-size: 0.7rem; color: #444; font-family: monospace;">UUID</span>
                 </div>
                 <button class="btn secondary" onclick="navTo('lobby')">Exit</button>
             </div>
@@ -1000,7 +1038,7 @@
         // --- SERVER BROWSER ---
         async function loadServerList() {
             try {
-                const res = await fetch('https://raw.githubusercontent.com/lamontgreen87-maker/SideQuest-Servers/main/servers.json');
+                const res = await fetch(`https://raw.githubusercontent.com/lamontgreen87-maker/SideQuest-Servers/main/servers.json?t=${Date.now()}`);
                 const data = await res.json();
 
                 const remoteServers = data.servers || [];
@@ -1333,6 +1371,16 @@
                 const sum = rolls.slice(1).reduce((a, b) => a + b, 0);
                 document.getElementById(`stat-${stat}`).value = sum;
             });
+            updateCalculatedStats();
+        }
+
+        function updateCalculatedStats() {
+            const dex = Number(document.getElementById('stat-dex').value);
+            const con = Number(document.getElementById('stat-con').value);
+            const getMod = (score) => Math.floor((score - 10) / 2);
+
+            document.getElementById('char-ac').value = 10 + getMod(dex);
+            document.getElementById('char-hp').value = 10 + getMod(con);
         }
 
         async function createCharacter() {
@@ -1389,8 +1437,8 @@
                 backstory: getVal('char-backstory'),
                 appearance: getVal('char-appearance'),
                 level: 1,
-                max_hp: 10 + getMod(stats.con),
-                armor_class: 10 + getMod(stats.dex),
+                max_hp: Number(getVal('char-hp')),
+                armor_class: Number(getVal('char-ac')),
                 stats: stats,
                 weapons: weaponsPayload,
                 items: getList('char-inventory'),
@@ -1484,6 +1532,16 @@
             const session = STATE.sessions.find(s => s.id === sessionId);
 
             document.getElementById('game-char-name').innerText = session ? session.charName : "Unknown";
+
+            const statsContainer = document.getElementById('game-stats');
+            if (session) {
+                statsContainer.innerHTML = `
+                    <div class="stat-badge"><i>🛡️</i> AC ${session.armor_class || 10}</div>
+                    <div class="stat-badge"><i>❤️</i> HP ${session.max_hp || 10}</div>
+                    <div class="stat-badge"><i>⭐</i> Lvl ${session.level} ${session.class}</div>
+                `;
+            }
+
             document.getElementById('game-session-id').innerText = sessionId.substring(0, 8) + "...";
             document.getElementById('viewport').innerHTML = '';
 

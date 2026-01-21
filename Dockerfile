@@ -4,6 +4,9 @@ FROM ollama/ollama
 # Install Python and pip for our FastAPI server
 RUN apt-get update && apt-get install -y python3 python3-pip curl dos2unix && rm -rf /var/lib/apt/lists/*
 
+# Set working directory to ensure paths align with entrypoint
+WORKDIR /app
+
 # Set default environment variables
 ENV MODEL_NAME="qwen3:4b"
 ENV MODEL_FALLBACK="qwen3:8b"

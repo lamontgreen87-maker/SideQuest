@@ -1,6 +1,6 @@
 {
     "version": "1.0",
-    "lastUpdated": "2026-01-18",
+    "lastUpdated": "2026-01-20",
     "servers": [
         {
             "id": "official-free",
@@ -14,6 +14,20 @@
                 "official",
                 "free",
                 "english"
+            ],
+            "passwordProtected": false
+        },
+        {
+            "id": "default-2",
+            "name": "default",
+            "description": "basic",
+            "url": "https://ohagmnlrcu843y-8000.proxy.runpod.net",
+            "pricing": "free",
+            "status": "online",
+            "owner": "lamont",
+            "tags": [
+                "community",
+                "new"
             ],
             "passwordProtected": false
         }

@@ -18,3 +18,21 @@ venv/
 # Git
 .git
 .gitignore
+
+# Data files (excluded - use volume mounts)
+data/
+*_store.json
+*_state.json
+intro_fallbacks.json
+login_codes.json
+redeem_codes.json
+wallet_nonces.json
+*.log
+*.txt
+*.exe
+*.ps1
+*.bat
+*.cmd
+
+# Backend subdirectory (not needed)
+backend/

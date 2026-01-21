@@ -29,7 +29,6 @@ class Character:
     appearance: Optional[str] = None
     race: Optional[str] = None
     background: Optional[str] = None
-    gender: Optional[str] = None
     alignment: Optional[str] = None
     traits: List[str] = field(default_factory=list)
     languages: List[str] = field(default_factory=list)
@@ -96,7 +95,6 @@ def serialize_character(pc: Character) -> Dict[str, object]:
                 "damage_type": weapon.damage_type,
                 "finesse": weapon.finesse,
             }
-            for key, weapon in pc.weapons.items()
             for key, weapon in pc.weapons.items()
         },
         "transport": pc.transport,
@@ -175,7 +173,6 @@ def deserialize_rules_session(data: Dict[str, object]) -> RulesSession:
                 damage_type=value["damage_type"],
                 finesse=bool(value.get("finesse", False)),
             )
-            for key, value in pc_data["weapons"].items()
             for key, value in pc_data["weapons"].items()
         },
         transport=pc_data.get("transport"),

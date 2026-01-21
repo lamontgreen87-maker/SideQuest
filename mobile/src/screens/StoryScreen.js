@@ -97,32 +97,13 @@ const LOADING_FLAVOR = [
   "straightening crooked hats",
   "dusting the crystal ball",
 ];
-const INTRO_FALLBACKS = [
-  "A lantern sputters beside a mossy stairwell that drops into a ruin no map admits. Damp air tastes of iron and old incense, and something below answers your footstep with a slow, waiting scrape. Your hand closes around a cracked stone charm that hums with a warning. Do you descend or search the threshold for a safer way in?",
-  "Stormlight flashes over a ridge of broken pillars as the earth rumbles beneath your boots. A hidden door has opened in the hillside, exhaling warm breath and the faint scent of spice and ash. Somewhere inside, a bell rings once, then stops. What do you do?",
-  "A low chant rises from the valley, and the torches along the old road flare as you approach. The shrine ahead is half-collapsed, its altar split, yet fresh footprints circle the entrance. Your pack shifts as if something inside wants out. Will you enter, scout, or call out?",
-];
-let lastIntroIndex = -1;
+const INTRO_FALLBACKS = []; let lastIntroIndex = -1;
 let lastFallbackIndex = -1;
 
-function pickIntro() {
-  if (!INTRO_PROMPTS.length) return "";
-  let index = Math.floor(Math.random() * INTRO_PROMPTS.length);
-  if (INTRO_PROMPTS.length > 1 && index === lastIntroIndex) {
-    index = (index + 1) % INTRO_PROMPTS.length;
-  }
-  lastIntroIndex = index;
-  return INTRO_PROMPTS[index] || INTRO_PROMPTS[0];
-}
+// function pickIntro() { ... } DELETED
 
 function pickFallbackIntro() {
-  if (!INTRO_FALLBACKS.length) return "";
-  let index = Math.floor(Math.random() * INTRO_FALLBACKS.length);
-  if (INTRO_FALLBACKS.length > 1 && index === lastFallbackIndex) {
-    index = (index + 1) % INTRO_FALLBACKS.length;
-  }
-  lastFallbackIndex = index;
-  return INTRO_FALLBACKS[index] || INTRO_FALLBACKS[0];
+  return "";
 }
 
 function looksLikePrompt(text) {
@@ -431,10 +412,8 @@ export default function StoryScreen({
         const payload = {};
         if (name) payload.name = name;
         if (klass) payload.klass = klass;
-        const response = await Promise.race([
-          apiPost(serverUrl, "/api/intro", payload),
-          new Promise((resolve) => setTimeout(() => resolve(null), 30000)),
-        ]);
+        // REMOVED TIMEOUT: Wait forever for the backend
+        const response = await apiPost(serverUrl, "/api/intro", payload);
         return stripThinking(response?.intro || null);
       } catch (error) {
         return null;
@@ -451,10 +430,8 @@ export default function StoryScreen({
           klass: character?.klass || undefined,
           character: character || undefined,
         };
-        const response = await Promise.race([
-          apiPost(serverUrl, `/api/sessions/${id}/intro`, payload),
-          new Promise((resolve) => setTimeout(() => resolve(null), 30000)),
-        ]);
+        // REMOVED TIMEOUT: Wait forever for the backend
+        const response = await apiPost(serverUrl, `/api/sessions/${id}/intro`, payload);
         if (!response) return null;
         return response?.intro ? sanitizeIntro(response.intro) : null;
       } catch (error) {
@@ -503,9 +480,12 @@ export default function StoryScreen({
 
   const getIntro = useCallback(
     async (name, klass) => {
+      // Wait indefinitely for the AI
       const apiIntro = sanitizeIntro(await fetchAiIntro(name, klass));
       if (apiIntro) return apiIntro;
-      return pickFallbackIntro() || pickIntro();
+      // If AI fails completely (network error), return empty string so we can retry or show error state, 
+      // do NOT show canned text.
+      return "";
     },
     [fetchAiIntro]
   );
@@ -599,6 +579,26 @@ export default function StoryScreen({
       hideSub.remove();
     };
   }, [keyboardTranslate]);
+
+  // NEW: Handle Session Reset (New Game)
+  useEffect(() => {
+    if (!resetSessionToken) return;
+    console.log("Resetting session for token:", resetSessionToken);
+
+    // Clear local state
+    setMessages([]);
+    setSessionId(null);
+    setAdventureLoading(true);
+    setRulesSeeded(false);
+
+    // Clear cache
+    storyCache.messages = [];
+    storyCache.sessionId = null;
+    storyCache.introKey = null;
+    introRequestRef.current = { key: null, inFlight: false };
+
+    // allow loadSession to naturally retry due to empty messages
+  }, [resetSessionToken]);
 
   const loadCombatCatalogs = useCallback(async () => {
     try {

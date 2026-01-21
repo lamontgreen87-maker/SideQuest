@@ -1,6 +1,5 @@
 import React from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
-import { theme } from "../theme";
 
 export default function Field({ label, value, onChangeText, placeholder, ...props }) {
   return (
@@ -10,7 +9,7 @@ export default function Field({ label, value, onChangeText, placeholder, ...prop
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={theme.colors.textMuted}
+        placeholderTextColor="#999"
         style={styles.input}
         {...props}
       />
@@ -20,25 +19,22 @@ export default function Field({ label, value, onChangeText, placeholder, ...prop
 
 const styles = StyleSheet.create({
   wrapper: {
-    marginBottom: theme.spacing.md,
+    marginBottom: 15,
   },
   label: {
-    color: theme.colors.gold,
-    fontSize: 12,
-    fontFamily: theme.fonts.body,
-    letterSpacing: 1,
-    marginBottom: theme.spacing.xs,
-    textTransform: 'uppercase',
+    fontSize: 14,
+    fontWeight: "500",
+    marginBottom: 5,
+    color: "#555",
   },
   input: {
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.layout.radius.sm,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-    color: theme.colors.textPrimary,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)', // Darker translucent background
-    fontFamily: theme.fonts.body,
+    borderColor: "#ccc",
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     fontSize: 16,
+    color: "#000",
+    backgroundColor: "#fff",
   },
 });

@@ -1,20 +1,13 @@
 import React from 'react';
 import { StyleSheet, View, StatusBar, SafeAreaView } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { theme } from '../theme';
 
 export const PageContainer = ({ children, style }) => {
     return (
         <View style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor={theme.colors.background} />
-            <LinearGradient
-                colors={theme.gradients.background}
-                style={styles.gradient}
-            >
-                <SafeAreaView style={[styles.content, style]}>
-                    {children}
-                </SafeAreaView>
-            </LinearGradient>
+            <StatusBar barStyle="dark-content" backgroundColor="#f0f0f0" />
+            <SafeAreaView style={[styles.content, style]}>
+                {children}
+            </SafeAreaView>
         </View>
     );
 };
@@ -22,12 +15,10 @@ export const PageContainer = ({ children, style }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: theme.colors.background,
-    },
-    gradient: {
-        flex: 1,
+        backgroundColor: '#f0f0f0', // Plain light gray
     },
     content: {
         flex: 1,
+        marginTop: 20,
     },
 });

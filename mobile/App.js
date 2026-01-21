@@ -280,12 +280,17 @@ export default function App() {
   }, [checkForUpdates, loadStoredState]);
 
   useEffect(() => {
-    if (!isPlayBuild) return;
-    GoogleSignin.configure({
-      webClientId: GOOGLE_WEB_CLIENT_ID || undefined,
-      offlineAccess: false,
-      forceCodeForRefreshToken: false,
-    });
+    // FORCE DISABLE GOOGLE SIGN IN TO PREVENT CRASHES
+    if (false && !isPlayBuild) return;
+    try {
+      GoogleSignin.configure({
+        webClientId: GOOGLE_WEB_CLIENT_ID || undefined,
+        offlineAccess: false,
+        forceCodeForRefreshToken: false,
+      });
+    } catch (e) {
+      console.log("GoogleSignin configure failed", e);
+    }
   }, []);
 
   useEffect(() => {
@@ -386,7 +391,7 @@ export default function App() {
     try {
       const noncePayload = await withTimeout(
         apiPost(serverUrl, "/api/auth/wallet/nonce", { address }),
-        15000,
+        60000,
         "Nonce request"
       );
       const message = noncePayload.message;
@@ -482,7 +487,7 @@ export default function App() {
           signature,
           typed_data: typedData,
         }),
-        15000,
+        60000,
         "Verify request"
       );
       await setItem(STORAGE_KEYS.authToken, authPayload.token);
@@ -506,8 +511,9 @@ export default function App() {
   }, [address, provider, serverUrl]);
 
   const signInWithGoogle = useCallback(async () => {
-    if (!isPlayBuild) {
-      setAuthStatus({ loading: false, error: "Google sign-in unavailable." });
+    // FORCE DISABLE
+    if (true || !isPlayBuild) {
+      setAuthStatus({ loading: false, error: "Google sign-in unavailable (Guest Only)." });
       return;
     }
     setAuthStatus({ loading: true, error: null });
@@ -521,7 +527,7 @@ export default function App() {
       }
       const authPayload = await withTimeout(
         apiPost(serverUrl, "/api/auth/google", { id_token: idToken }),
-        15000,
+        60000,
         "Google sign-in"
       );
       await setItem(STORAGE_KEYS.authToken, authPayload.token);
@@ -549,7 +555,7 @@ export default function App() {
     try {
       const authPayload = await withTimeout(
         apiPost(serverUrl, "/api/auth/email/login", { email, password }),
-        15000,
+        60000,
         "Email login"
       );
       await setItem(STORAGE_KEYS.authToken, authPayload.token);
@@ -583,7 +589,7 @@ export default function App() {
       }
       const authPayload = await withTimeout(
         apiPost(serverUrl, "/api/auth/email/register", payload),
-        15000,
+        60000,
         "Email registration"
       );
       await setItem(STORAGE_KEYS.authToken, authPayload.token);
@@ -612,7 +618,7 @@ export default function App() {
     try {
       const authPayload = await withTimeout(
         apiPost(serverUrl, "/api/auth/guest", {}),
-        15000,
+        60000,
         "Guest sign-in"
       );
       await setItem(STORAGE_KEYS.authToken, authPayload.token);

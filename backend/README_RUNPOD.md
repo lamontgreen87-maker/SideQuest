@@ -16,6 +16,14 @@ In the RunPod dashboard, go to **Templates** -> **New Template**.
 - **Expose HTTP**: `8000` (The FastAPI game engine)
 - **Expose TCP**: `11434` (Ollama API - optional but useful for debugging)
 
+### Private Repository Settings (Recommended)
+If you marked your repository as **Private** on Docker Hub (to protect your code):
+1. Scroll down to **Container Registry Auth**.
+2. **Registry Domain**: `docker.io`
+3. **Username**: Your Docker Hub username.
+4. **Password**: Your Docker Hub **Access Token** (Creating a token is safer than using your password).
+   - Go to [Docker Hub Security Settings](https://hub.docker.com/settings/security) -> New Access Token.
+
 ## 2. Environment Variables
 The image comes with sensible defaults, but you can override them here:
 
