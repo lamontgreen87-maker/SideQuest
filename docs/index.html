@@ -1041,12 +1041,19 @@
             savedServers: JSON.parse(localStorage.getItem('saved_servers') || '[]')
         };
 
-        // --- SERVER BROWSER ---
-        // --- SERVER BROWSER ---
         async function loadServerList() {
+            const container = document.getElementById('server-list');
+            container.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-dim);">🔍 Searching for servers...</div>';
+
             try {
-                const res = await fetch(`https://raw.githubusercontent.com/lamontgreen87-maker/SideQuest-Servers/main/servers.json?t=${Date.now()}`);
+                const url = `https://raw.githubusercontent.com/lamontgreen87-maker/SideQuest-Servers/main/servers.json?cache_bust=${Date.now()}`;
+                console.log('[Registry] Fetching:', url);
+
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+
                 const data = await res.json();
+                console.log('[Registry] Loaded:', data);
 
                 const remoteServers = data.servers || [];
                 const saved = STATE.savedServers || [];
@@ -1054,27 +1061,38 @@
                 // key by URL to dedupe
                 const map = new Map();
                 remoteServers.forEach(s => {
-                    s.status = 'checking'; // Default state
+                    s.status = 'checking';
                     map.set(s.url, s);
                 });
                 saved.forEach(s => {
-                    // Preserve checking state if overwriting, or set default
                     if (!s.status) s.status = 'checking';
                     map.set(s.url, s);
                 });
 
                 const combined = Array.from(map.values());
-                renderServerList(combined);
-
-                // Trigger health checks in background
-                checkAllServersHealth(combined);
+                if (combined.length === 0) {
+                    container.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-dim);">No servers found in registry.</div>';
+                } else {
+                    renderServerList(combined);
+                    checkAllServersHealth(combined);
+                }
 
             } catch (e) {
-                console.error('Failed to load servers:', e);
-                // Fallback to minimal + saved
-                STATE.savedServers.forEach(s => s.status = 'checking');
-                renderServerList(STATE.savedServers);
-                checkAllServersHealth(STATE.savedServers);
+                console.error('[Registry] Error:', e);
+                if (STATE.savedServers.length > 0) {
+                    console.log('[Registry] Falling back to saved servers');
+                    STATE.savedServers.forEach(s => s.status = 'checking');
+                    renderServerList(STATE.savedServers);
+                    checkAllServersHealth(STATE.savedServers);
+                } else {
+                    container.innerHTML = `
+                        <div style="text-align:center; padding:2rem; color:#ff4444;">
+                            <p>Failed to load server list.</p>
+                            <small style="color:var(--text-dim);">${e.message}</small><br>
+                            <button class="btn secondary" style="margin-top:1rem" onclick="loadServerList()">Retry</button>
+                        </div>
+                    `;
+                }
             }
         }
 
