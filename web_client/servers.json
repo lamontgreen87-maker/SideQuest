@@ -1,0 +1,21 @@
+{
+    "version": "1.0",
+    "lastUpdated": "2026-01-18",
+    "servers": [
+        {
+            "id": "official-free",
+            "name": "Official SideQuest Server",
+            "description": "Free community server by the creator. 1000 free credits to start!",
+            "url": "https://your-runpod-url.cloud",
+            "pricing": "Free",
+            "status": "online",
+            "owner": "Lamont Green",
+            "tags": [
+                "official",
+                "free",
+                "english"
+            ],
+            "passwordProtected": false
+        }
+    ]
+}
