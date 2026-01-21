@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SideQuest Web Client</title>
+    <style>
+        :root {
+            --bg-dark: #0a0a0c;
+            --bg-panel: #16181d;
+            --bg-input: #0f1013;
+            --accent: #00e5ff;
+            --accent-dim: #00b8cc;
+            --text-main: #e0e6ed;
+            --text-dim: #94a3b8;
+            --border: #2d3748;
+            --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            --font: 'Inter', system-ui, -apple-system, sans-serif;
+            --radius: 12px;
+        }
+
+        /* --- Global Reset & Typography --- */
+        * {
+            box-sizing: border-box;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-dark);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-dim);
+        }
+
+        body {
+            margin: 0;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: var(--font);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+        }
+
+        h1,
+        h2,
+        h3 {
+            margin: 0;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        p {
+            margin: 0 0 1rem;
+            line-height: 1.6;
+            color: var(--text-dim);
+        }
+
+        small {
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            display: block;
+            margin-top: 0.2rem;
+        }
+
+        /* --- Layout --- */
+        #app {
+            width: 100%;
+            max-width: 1200px;
+            height: 100%;
+            position: relative;
+            background: radial-gradient(circle at top right, #1a202c 0%, var(--bg-dark) 40%);
+        }
+
+        .screen {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            padding: 2rem;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            transform: scale(0.98);
+        }
+
+        .screen.active {
+            opacity: 1;
+            pointer-events: all;
+            transform: scale(1);
+            z-index: 10;
+        }
+
+        /* --- Components --- */
+        .card {
+            background-color: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 2rem;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+        }
+
+        .input-group {
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.4rem;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        input,
+        select,
+        textarea {
+            width: 100%;
+            padding: 0.6rem 0.8rem;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: white;
+            font-family: inherit;
+            font-size: 0.95rem;
+            transition: border-color 0.2s;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+            color: #000;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.1s, filter 0.2s;
+            font-size: 1rem;
+            text-align: center;
+        }
+
+        .btn:hover {
+            filter: brightness(1.1);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn.secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+
+        .btn.secondary:hover {
+            border-color: var(--text-main);
+            color: var(--text-main);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* --- Lobby View --- */
+        #view-lobby {
+            align-items: center;
+            justify-content: center;
+        }
+
+        .session-list {
+            margin-top: 2rem;
+            display: grid;
+            gap: 0.8rem;
+            width: 100%;
+            max-width: 500px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .session-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            background: var(--bg-input);
+            border-radius: 8px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .session-item:hover {
+            border-color: var(--accent);
+            background: #1a1d24;
+        }
+
+        .session-info h3 {
+            font-size: 1rem;
+            color: white;
+            margin-bottom: 0.2rem;
+        }
+
+        .session-info span {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        /* --- Creator View --- */
+        #view-creator {
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+        }
+
+        .creator-container {
+            width: 100%;
+            max-width: 900px;
+            max-height: 90vh;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        .section-title {
+            grid-column: 1 / -1;
+            font-size: 1.1rem;
+            color: var(--accent);
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+            margin-top: 1rem;
+        }
+
+        .section-title:first-child {
+            margin-top: 0;
+        }
+
+        .col-full {
+            grid-column: 1 / -1;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .stat-box {
+            text-align: center;
+        }
+
+        .stat-box label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-box input {
+            text-align: center;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .checkbox-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 0.5rem;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem;
+            background: var(--bg-input);
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: var(--text-dim);
+        }
+
+        .checkbox-label:hover {
+            border-color: var(--text-main);
+        }
+
+        .checkbox-label input:checked+span {
+            color: var(--accent);
+        }
+
+        .spell-pill {
+            font-size: 0.8rem;
+            padding: 0.2rem 0.5rem;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            margin-left: auto;
+            color: var(--text-dim);
+        }
+
+        /* --- Game View --- */
+        #view-game {
+            padding: 0;
+        }
+
+        #chat-header {
+            padding: 1rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(22, 24, 29, 0.9);
+        }
+
+        #viewport {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            scroll-behavior: smooth;
+        }
+
+        .msg {
+            max-width: 800px;
+            line-height: 1.6;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+            text-align: right;
+            color: var(--accent);
+        }
+
+        .msg.ai {
+            align-self: flex-start;
+            color: var(--text-main);
+        }
+
+        .msg.system {
+            align-self: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            font-style: italic;
+        }
+
+        .msg-bubble {
+            background: var(--bg-panel);
+            padding: 1rem 1.5rem;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            display: inline-block;
+            text-align: left;
+        }
+
+        .msg.user .msg-bubble {
+            background: rgba(0, 229, 255, 0.1);
+            border-color: rgba(0, 229, 255, 0.2);
+        }
+
+        #input-area {
+            padding: 2rem;
+            background: var(--bg-panel);
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+
+        #user-input {
+            max-width: 800px;
+        }
+
+        /* --- Settings Panel --- */
+        #settings-overlay {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 100;
+            background: var(--bg-panel);
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            display: none;
+        }
+
+        #settings-overlay.visible {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="app">
+        <!-- SETTINGS (Global) -->
+        <div style="position: absolute; bottom: 1rem; left: 1rem; z-index: 50; opacity: 0.7;">
+            <button class="btn secondary" onclick="toggleSettings()">⚙️ Settings</button>
+        </div>
+        <div id="settings-overlay">
+            <h3>Connection Settings</h3>
+            <div id="current-server-info"
+                style="margin-bottom: 1rem; padding: 0.8rem; background: rgba(0,0,0,0.3); border-radius: 6px;">
+                <!-- Will be populated by JavaScript -->
+            </div>
+            <div class="input-group">
+                <label>Server URL</label>
+                <input type="text" id="server-url" placeholder="https://xxx-8000.proxy.runpod.net">
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button class="btn" onclick="saveSettings()">Save</button>
+                <button class="btn secondary" onclick="navTo('servers')">Switch Server</button>
+            </div>
+        </div>
+
+
+        <!-- VIEW 0: SERVER BROWSER -->
+        <div id="view-servers" class="screen active">
+            <div class="card" style="width: 100%; max-width: 800px;">
+                <h1 style="margin-bottom: 0.5rem;">Choose a Server</h1>
+                <p style="color: var(--text-dim); margin-bottom: 2rem;">Select where you want to play SideQuest</p>
+
+                <!-- Server List -->
+                <div id="server-list" style="display: grid; gap: 1rem; margin-bottom: 2rem;">
+                    <!-- Server cards will be injected here -->
+                </div>
+
+                <!-- Custom Server -->
+                <details style="margin-top: 1rem;">
+                    <summary style="cursor: pointer; color: var(--text-dim); padding: 0.5rem;">Add Custom Server
+                    </summary>
+                    <div class="input-group" style="margin-top: 1rem;">
+                        <label>Server URL</label>
+                        <input type="text" id="custom-server-url" placeholder="https://your-server.com">
+                    </div>
+                    <button class="btn" onclick="connectToCustomServer()">Connect</button>
+                </details>
+            </div>
+        </div>
+
+        <!-- VIEW 1: LOBBY -->
+        <div id="view-lobby" class="screen">
+            <div class="card" style="text-align: center; width: 100%; max-width: 500px;">
+                <h1>SideQuest</h1>
+                <p>Your Adventure Awaits</p>
+
+                <div id="session-list" class="session-list">
+                    <!-- Session items will be injected here -->
+                </div>
+
+                <div style="margin-top: 2rem;">
+                    <button class="btn" onclick="navTo('creator')">+ New Character</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW 2: CREATOR (EXPANDED) -->
+        <div id="view-creator" class="screen">
+            <div class="card creator-container">
+                <!-- Header -->
+                <div class="col-full" style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Create Character</h2>
+                    <button class="btn secondary" onclick="navTo('lobby')" style="padding:0.4rem 1rem;">Cancel</button>
+                </div>
+
+                <!-- Basics -->
+                <div class="col-full segment">
+                    <div class="section-title">Core Identity</div>
+                    <div class="grid-2">
+                        <div class="input-group">
+                            <label>Name</label>
+                            <input type="text" id="char-name" placeholder="Sir Galen">
+                        </div>
+                        <div class="input-group">
+                            <label>Class</label>
+                            <select id="char-class" onchange="renderSpells()">
+                                <option value="Fighter">Fighter</option>
+                                <option value="Rogue">Rogue</option>
+                                <option value="Wizard">Wizard</option>
+                                <option value="Cleric">Cleric</option>
+                                <option value="Barbarian">Barbarian</option>
+                                <option value="Paladin">Paladin</option>
+                                <option value="Ranger">Ranger</option>
+                                <option value="Monk">Monk</option>
+                                <option value="Bard">Bard</option>
+                                <option value="Druid">Druid</option>
+                                <option value="Sorcerer">Sorcerer</option>
+                                <option value="Warlock">Warlock</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid-3">
+                        <div class="input-group">
+                            <label>Race</label>
+                            <select id="char-race">
+                                <option value="Human">Human</option>
+                                <option value="Elf">Elf</option>
+                                <option value="Dwarf">Dwarf</option>
+                                <option value="Halfling">Halfling</option>
+                                <option value="Orc">Orc</option>
+                                <option value="Gnome">Gnome</option>
+                                <option value="Tiefling">Tiefling</option>
+                            </select>
+                        </div>
+                        <div class="input-group">
+                            <label>Gender</label>
+                            <select id="char-gender">
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="input-group">
+                            <label>Alignment</label>
+                            <select id="char-alignment">
+                                <option value="True Neutral">True Neutral</option>
+                                <option value="Lawful Good">Lawful Good</option>
+                                <option value="Neutral Good">Neutral Good</option>
+                                <option value="Chaotic Good">Chaotic Good</option>
+                                <option value="Lawful Neutral">Lawful Neutral</option>
+                                <option value="Chaotic Neutral">Chaotic Neutral</option>
+                                <option value="Lawful Evil">Lawful Evil</option>
+                                <option value="Neutral Evil">Neutral Evil</option>
+                                <option value="Chaotic Evil">Chaotic Evil</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>Background</label>
+                        <input type="text" id="char-bg" placeholder="Soldier, Hermit, Noble...">
+                    </div>
+                </div>
+
+                <!-- Stats -->
+                <div class="col-full segment">
+                    <div class="section-title">Ability Scores</div>
+                    <div class="grid-3" style="gap:1.5rem;">
+                        <div class="stat-box"><label>STR</label><input type="number" id="stat-str" value="10"></div>
+                        <div class="stat-box"><label>DEX</label><input type="number" id="stat-dex" value="10"></div>
+                        <div class="stat-box"><label>CON</label><input type="number" id="stat-con" value="10"></div>
+                        <div class="stat-box"><label>INT</label><input type="number" id="stat-int" value="10"></div>
+                        <div class="stat-box"><label>WIS</label><input type="number" id="stat-wis" value="10"></div>
+                        <div class="stat-box"><label>CHA</label><input type="number" id="stat-cha" value="10"></div>
+                    </div>
+                    <div style="text-align:center; margin-top:1rem;">
+                        <button class="btn secondary" onclick="rollStats()">🎲 Roll Stats (4d6)</button>
+                    </div>
+                </div>
+
+                <!-- Equipment -->
+                <div class="col-full segment">
+                    <div class="section-title">Weapons & Gear</div>
+                    <label>Starting Weapons (Select up to 2)</label>
+                    <div class="checkbox-grid" id="weapon-grid">
+                        <!-- JS Injected -->
+                    </div>
+                </div>
+
+                <!-- Details -->
+                <div class="col-full segment">
+                    <div class="section-title">Proficiencies & Spells</div>
+
+                    <!-- Spells Injection Point -->
+                    <div id="spell-section" style="display:none; margin-bottom:1.5rem;">
+                        <label>Known Spells / Cantrips</label>
+                        <div class="checkbox-grid" id="spell-grid"></div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="input-group">
+                            <label>Inventory</label>
+                            <textarea id="char-inventory" rows="3" placeholder="Rope, Torches, Rations..."></textarea>
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="input-group">
+                            <label>Traits / Feats</label>
+                            <textarea id="char-traits" rows="2" placeholder="Darkvision, Lucky..."></textarea>
+                        </div>
+                        <div class="input-group">
+                            <label>Languages</label>
+                            <textarea id="char-languages" rows="2" placeholder="Common, Elvish..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Story & Apperance -->
+                <div class="col-full segment">
+                    <div class="section-title">Story & Description</div>
+                    <div class="grid-2">
+                        <div class="input-group">
+                            <label>Backstory</label>
+                            <textarea id="char-backstory" rows="4"
+                                placeholder="A fallen knight seeking redemption..."></textarea>
+                        </div>
+                        <div class="input-group">
+                            <label>Appearance</label>
+                            <textarea id="char-appearance" rows="4"
+                                placeholder="Tall, scarred, wears a dark cloak..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-full"
+                    style="position:sticky; bottom:0; background:var(--bg-panel); padding-top:1rem; border-top:1px solid var(--border);">
+                    <button class="btn" style="width:100%;" onclick="createCharacter()">Venture Forth</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW 3: GAME -->
+        <div id="view-game" class="screen">
+            <div id="chat-header">
+                <div>
+                    <h3 id="game-char-name">Character Name</h3>
+                    <span id="game-session-id"
+                        style="font-size: 0.8rem; color: #666; font-family: monospace;">UUID</span>
+                </div>
+                <button class="btn secondary" onclick="navTo('lobby')">Exit</button>
+            </div>
+
+            <div id="viewport">
+                <div class="msg system">Initializing Neural Link...</div>
+            </div>
+
+            <div id="input-area">
+                <input type="text" id="user-input" placeholder="What do you do?" onkeypress="handleEnter(event)">
+                <button class="btn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONSTANTS ---
+        const WEAPONS_DB = [
+            { id: "dagger", name: "Dagger", dmg: "1d4", type: "piercing", stat: "dex" },
+            { id: "shortsword", name: "Shortsword", dmg: "1d6", type: "piercing", stat: "dex" },
+            { id: "longsword", name: "Longsword", dmg: "1d8", type: "slashing", stat: "str" },
+            { id: "greatsword", name: "Greatsword", dmg: "2d6", type: "slashing", stat: "str" },
+            { id: "greataxe", name: "Greataxe", dmg: "1d12", type: "slashing", stat: "str" },
+            { id: "scimitar", name: "Scimitar", dmg: "1d6", type: "slashing", stat: "dex" },
+            { id: "shortbow", name: "Shortbow", dmg: "1d6", type: "piercing", stat: "dex" },
+            { id: "longbow", name: "Longbow", dmg: "1d8", type: "piercing", stat: "dex" },
+            { id: "staff", name: "Quarterstaff", dmg: "1d6", type: "bludgeoning", stat: "str" },
+            { id: "mace", name: "Mace", dmg: "1d6", type: "bludgeoning", stat: "str" },
+            { id: "warhammer", name: "Warhammer", dmg: "1d8", type: "bludgeoning", stat: "str" },
+        ];
+
+        const SPELLS_DB = [
+            { id: "magic_missile", name: "Magic Missile", lvl: 1, classes: ["Wizard", "Sorcerer"] },
+            { id: "cure_wounds", name: "Cure Wounds", lvl: 1, classes: ["Cleric", "Paladin", "Druid", "Bard"] },
+            { id: "shield", name: "Shield", lvl: 1, classes: ["Wizard", "Sorcerer"] },
+            { id: "fireball", name: "Fireball", lvl: 3, classes: ["Wizard", "Sorcerer"] },
+            { id: "hunter_s_mark", name: "Hunter's Mark", lvl: 1, classes: ["Ranger"] },
+            { id: "guidance", name: "Guidance", lvl: 0, classes: ["Cleric", "Druid", "Bard", "Paladin"] },
+            { id: "healing_word", name: "Healing Word", lvl: 1, classes: ["Cleric", "Druid", "Bard"] },
+            { id: "eldritch_blast", name: "Eldritch Blast", lvl: 0, classes: ["Warlock"] },
+            { id: "burning_hands", name: "Burning Hands", lvl: 1, classes: ["Wizard", "Sorcerer"] },
+            { id: "detect_magic", name: "Detect Magic", lvl: 1, classes: ["Wizard", "Cleric", "Bard", "Druid", "Paladin", "Ranger", "Sorcerer"] },
+            { id: "mage_hand", name: "Mage Hand", lvl: 0, classes: ["Wizard", "Sorcerer", "Bard", "Warlock"] },
+        ];
+
+        // --- STATE ---
+        const STATE = {
+            serverUrl: localStorage.getItem('server_url') || 'http://localhost:8000',
+            sessions: JSON.parse(localStorage.getItem('dungeon_sessions') || '[]'),
+            currentSessionId: null,
+            authToken: localStorage.getItem('auth_token') || null,
+            currentServer: JSON.parse(localStorage.getItem('current_server') || 'null'),
+            savedServers: JSON.parse(localStorage.getItem('saved_servers') || '[]')
+        };
+
+        // --- SERVER BROWSER ---
+        async function loadServerList() {
+            try {
+                const res = await fetch('https://raw.githubusercontent.com/lamontgreen87-maker/SideQuest-Servers/main/servers.json');
+                const data = await res.json();
+                // Merge with saved servers (deduplicated by URL)
+                const remoteServers = data.servers || [];
+                const saved = STATE.savedServers || [];
+
+                // key by URL to dedupe
+                const map = new Map();
+                remoteServers.forEach(s => map.set(s.url, s));
+                saved.forEach(s => map.set(s.url, s)); // Saved overrides remote if same URL (or vice-versa, user preference)
+
+                renderServerList(Array.from(map.values()));
+            } catch (e) {
+                console.error('Failed to load servers:', e);
+                // Fallback to minimal + saved
+                renderServerList(STATE.savedServers);
+            }
+        }
+
+        function renderServerList(servers) {
+            const container = document.getElementById('server-list');
+            container.innerHTML = servers.map(server => `
+                <div class="card" style="padding: 1rem; cursor: pointer; border: 2px solid ${STATE.currentServer?.id === server.id ? 'var(--accent)' : 'var(--border)'};" 
+                     onclick="connectToServer(${JSON.stringify(server).replace(/"/g, '&quot;')})">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <div>
+                            <h3 style="margin: 0;">${server.name}</h3>
+                            <p style="margin: 0.2rem 0; font-size: 0.85rem; color: var(--text-dim);">by ${server.owner}</p>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            ${server.status === 'online' ? '🟢' : '🔴'}
+                            ${server.passwordProtected ? '🔒' : ''}
+                        </div>
+                    </div>
+                    <p style="margin: 0.5rem 0 1rem; color: var(--text-dim); font-size: 0.9rem;">${server.description}</p>
+                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <span style="padding: 0.2rem 0.6rem; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 0.8rem;">${server.pricing}</span>
+                        ${server.tags.map(tag => `<span style="padding: 0.2rem 0.6rem; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 0.8rem;">${tag}</span>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function connectToServer(server) {
+            console.log('Connecting to:', server);
+
+            // Update STATE
+            STATE.currentServer = server;
+            STATE.serverUrl = server.url;
+            localStorage.setItem('current_server', JSON.stringify(server));
+            localStorage.setItem('server_url', server.url);
+
+            // SAVE TO SAVED SERVERS (if new)
+            const existingIndex = STATE.savedServers.findIndex(s => s.url === server.url);
+            if (existingIndex === -1) {
+                STATE.savedServers.push(server);
+                localStorage.setItem('saved_servers', JSON.stringify(STATE.savedServers));
+            } else {
+                // Update existing info
+                STATE.savedServers[existingIndex] = server;
+                localStorage.setItem('saved_servers', JSON.stringify(STATE.savedServers));
+            }
+
+            // Clear old auth token (new server = new token)
+            STATE.authToken = null;
+            localStorage.removeItem('auth_token');
+
+            // Try to authenticate
+            await initAuth();
+
+            // Navigate to lobby
+            navTo('lobby');
+        }
+
+        async function connectToCustomServer() {
+            const url = document.getElementById('custom-server-url').value.trim();
+            if (!url) return alert('Please enter a server URL');
+
+            const customServer = {
+                id: 'custom',
+                name: 'Custom Server',
+                url: url,
+                owner: 'Unknown',
+                pricing: 'Unknown',
+                status: 'online',
+                tags: ['custom']
+            };
+
+            await connectToServer(customServer);
+        }
+
+        // --- AUTH ---
+        async function initAuth() {
+            if (STATE.authToken) return; // Already logged in
+
+            try {
+                const res = await fetch(`${STATE.serverUrl}/api/auth/guest`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (!res.ok) {
+                    console.error('Guest auth failed:', res.status);
+                    return;
+                }
+
+                const data = await res.json();
+                STATE.authToken = data.token;
+                localStorage.setItem('auth_token', data.token);
+                console.log('Guest login successful');
+            } catch (e) {
+                console.error('Auth error:', e);
+            }
+        }
+
+        function getAuthHeaders() {
+            const headers = { 'Content-Type': 'application/json' };
+            if (STATE.authToken) {
+                headers['Authorization'] = `Bearer ${STATE.authToken}`;
+            }
+            return headers;
+        }
+
+        // --- INIT ---
+        (async () => {
+            // If no server is selected, show server browser
+            if (!STATE.currentServer) {
+                await loadServerList();
+                navTo('servers');
+            } else {
+                // Server already selected, login and show lobby
+                await initAuth();
+                document.getElementById('server-url').value = STATE.serverUrl;
+                renderSessionList();
+                navTo('lobby');
+            }
+            initWeaponGrid();
+            renderSpells();
+        })();
+
+        // --- NAVIGATION ---
+        function navTo(viewId) {
+            document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
+            document.getElementById(`view-${viewId}`).classList.add('active');
+            if (viewId === 'lobby') renderSessionList();
+        }
+
+        function toggleSettings() {
+            const overlay = document.getElementById('settings-overlay');
+            overlay.classList.toggle('visible');
+            if (overlay.classList.contains('visible')) {
+                updateServerInfo();
+            }
+        }
+
+        function updateServerInfo() {
+            const info = document.getElementById('current-server-info');
+            if (STATE.currentServer) {
+                info.innerHTML = `
+                    <div style="font-size: 0.9rem;">
+                        <strong>Current Server:</strong> ${STATE.currentServer.name}<br>
+                        <span style="color: var(--text-dim);">${STATE.currentServer.url}</span>
+                    </div>
+                `;
+            } else {
+                info.innerHTML = '<span style="color: var(--text-dim);">No server connected</span>';
+            }
+        }
+
+        function saveSettings() {
+            const url = document.getElementById('server-url').value.replace(/\/$/, '');
+            STATE.serverUrl = url;
+            localStorage.setItem('server_url', url);
+            toggleSettings();
+            alert('Settings Saved');
+        }
+
+        function initWeaponGrid() {
+            const grid = document.getElementById('weapon-grid');
+            grid.innerHTML = WEAPONS_DB.map(w => `
+            <label class="checkbox-label">
+                <input type="checkbox" name="weapons" value="${w.id}">
+                <span>${w.name} <small>${w.dmg}</small></span>
+            </label>
+        `).join('');
+        }
+
+        function renderSpells() {
+            const cls = document.getElementById('char-class').value;
+            const grid = document.getElementById('spell-grid');
+            const section = document.getElementById('spell-section');
+
+            // Filter spells for this class
+            const available = SPELLS_DB.filter(s => s.classes.includes(cls));
+
+            if (available.length === 0) {
+                section.style.display = 'none';
+                grid.innerHTML = '';
+                return;
+            }
+
+            section.style.display = 'block';
+            grid.innerHTML = available.map(s => `
+            <label class="checkbox-label">
+                <input type="checkbox" name="spells" value="${s.name}">
+                <span>${s.name} <span class="spell-pill">${s.lvl === 0 ? 'Cantrip' : 'Lvl ' + s.lvl}</span></span>
+            </label>
+        `).join('');
+        }
+
+        // --- LOBBY LOGIC ---
+        function renderSessionList() {
+            const list = document.getElementById('session-list');
+            list.innerHTML = '';
+
+            if (STATE.sessions.length === 0) {
+                list.innerHTML = '<div style="color:var(--text-dim); text-align:center; padding:1rem;">No saved games found.</div>';
+                return;
+            }
+
+            STATE.sessions.forEach(sess => {
+                const div = document.createElement('div');
+                div.className = 'session-item';
+                div.innerHTML = `
+                <div class="session-info">
+                    <h3>${sess.charName}</h3>
+                    <span>Lvl ${sess.level} ${sess.class}</span>
+                </div>
+                <div style="font-size: 0.8rem; color: #555;">${new Date(sess.lastPlayed).toLocaleDateString()}</div>
+            `;
+                div.onclick = () => loadGame(sess.id);
+                list.appendChild(div);
+            });
+        }
+
+        // --- CREATOR LOGIC ---
+        function rollStats() {
+            ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(stat => {
+                // 4d6 drop low
+                const rolls = Array.from({ length: 4 }, () => Math.floor(Math.random() * 6) + 1);
+                rolls.sort((a, b) => a - b);
+                const sum = rolls.slice(1).reduce((a, b) => a + b, 0);
+                document.getElementById(`stat-${stat}`).value = sum;
+            });
+        }
+
+        async function createCharacter() {
+            // 1. Gather Data
+            const getVal = (id) => document.getElementById(id).value;
+            const getList = (id) => getVal(id).split(',').map(s => s.trim()).filter(s => s);
+
+            const charName = getVal('char-name') || "Unknown Hero";
+            const charClass = getVal('char-class');
+
+            // Stats
+            const stats = {
+                str: Number(getVal('stat-str')),
+                dex: Number(getVal('stat-dex')),
+                con: Number(getVal('stat-con')),
+                int: Number(getVal('stat-int')),
+                wis: Number(getVal('stat-wis')),
+                cha: Number(getVal('stat-cha'))
+            };
+
+            // Mod Calc (Floor(Score-10)/2)
+            const getMod = (score) => Math.floor((score - 10) / 2);
+
+            // Weapons
+            const selectedWeaponIds = Array.from(document.querySelectorAll('input[name="weapons"]:checked')).map(el => el.value);
+            if (selectedWeaponIds.length === 0) {
+                alert("You must choose at least one weapon!");
+                return;
+            }
+
+            const weaponsPayload = selectedWeaponIds.map(id => {
+                const def = WEAPONS_DB.find(w => w.id === id);
+                const mod = getMod(stats[def.stat]);
+                const modStr = mod >= 0 ? `+${mod}` : `${mod}`;
+                return {
+                    name: def.name,
+                    attack_ability: def.stat,
+                    damage: `${def.dmg}${modStr}`,
+                    damage_type: def.type,
+                    finesse: (def.stat === 'dex')
+                };
+            });
+
+            // Spells
+            const selectedSpells = Array.from(document.querySelectorAll('input[name="spells"]:checked')).map(el => el.value);
+
+            const payload = {
+                name: charName,
+                klass: charClass,
+                race: getVal('char-race'),
+                gender: getVal('char-gender'),
+                background: getVal('char-bg') || "Wanderer",
+                alignment: getVal('char-alignment'),
+                backstory: getVal('char-backstory'),
+                appearance: getVal('char-appearance'),
+                level: 1,
+                max_hp: 10 + getMod(stats.con),
+                armor_class: 10 + getMod(stats.dex),
+                stats: stats,
+                weapons: weaponsPayload,
+                items: getList('char-inventory'),
+                traits: getList('char-traits'),
+                languages: getList('char-languages'),
+                known_spells: selectedSpells,
+                cantrips_known: [],
+                transport: "None"
+            };
+
+            if (payload.items.length === 0) payload.items = ["Backpack", "Rations", "Torch"];
+
+            const btn = document.querySelector('#view-creator button.btn[onclick="createCharacter()"]');
+            const originalText = btn.innerText;
+            btn.innerText = "Forging Identity...";
+            btn.disabled = true;
+
+            try {
+                // 2. Call API
+                const res = await fetch(`${STATE.serverUrl}/api/characters`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText || "API Error");
+                }
+
+                const charData = await res.json();
+                const charId = charData.character_id;
+
+                // 3. Create Session in Backend
+                const createSessionRes = await fetch(`${STATE.serverUrl}/api/sessions`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        metadata: {
+                            character_id: charData.character_id,
+                            character_name: charName,
+                            character_class: charClass
+                        }
+                    })
+                });
+
+                if (!createSessionRes.ok) throw new Error("Failed to create session");
+                const sessionData = await createSessionRes.json();
+                const sessionId = sessionData.session_id;
+
+                // 4. Get Intro
+                const introRes = await fetch(`${STATE.serverUrl}/api/sessions/${sessionId}/intro`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        name: charName,
+                        klass: charClass,
+                        character: payload
+                    })
+                });
+
+                if (!introRes.ok) throw new Error("Failed to start session");
+                const introData = await introRes.json();
+
+                // 5. Save
+                const newSession = {
+                    id: sessionId,
+                    charId: charId,
+                    charName: charName,
+                    class: charClass,
+                    level: 1,
+                    lastPlayed: Date.now()
+                };
+                STATE.sessions.unshift(newSession);
+                localStorage.setItem('dungeon_sessions', JSON.stringify(STATE.sessions));
+
+                // 6. Launch
+                loadGame(sessionId, introData.intro);
+
+            } catch (e) {
+                alert(`Error: ${e.message}`);
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        // --- GAME LOGIC ---
+        async function loadGame(sessionId, initialIntro = null) {
+            STATE.currentSessionId = sessionId;
+            const session = STATE.sessions.find(s => s.id === sessionId);
+
+            document.getElementById('game-char-name').innerText = session ? session.charName : "Unknown";
+            document.getElementById('game-session-id').innerText = sessionId.substring(0, 8) + "...";
+            document.getElementById('viewport').innerHTML = '';
+
+            navTo('game');
+
+            if (initialIntro) {
+                addMessage(initialIntro, 'ai');
+            } else {
+                // Fetch History
+                const vp = document.getElementById('viewport');
+                const placeholder = document.createElement('div');
+                placeholder.className = 'msg system';
+                placeholder.innerText = "Downloading memories...";
+                vp.appendChild(placeholder);
+
+                try {
+                    const res = await fetch(`${STATE.serverUrl}/api/sessions/${sessionId}/messages`, {
+                        headers: getAuthHeaders()
+                    });
+                    if (!res.ok) throw new Error("Failed to fetch history");
+
+                    const messages = await res.json();
+                    placeholder.remove();
+
+                    messages.forEach(msg => {
+                        if (msg.role === 'system') return; // Skip system prompts
+                        const role = msg.role === 'assistant' ? 'ai' : 'user';
+                        addMessage(msg.content, role);
+                    });
+
+                    // Add a small spacer/system msg to show end of history
+                    addMessage("--- Session Resumed ---", "system");
+
+                } catch (e) {
+                    placeholder.innerText = "Error loading history: " + e.message;
+                }
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const text = input.value.trim();
+            if (!text) return;
+
+            addMessage(text, 'user');
+            input.value = '';
+
+            try {
+                // Endpoint: POST /api/sessions/{id}/messages
+                const res = await fetch(`${STATE.serverUrl}/api/sessions/${STATE.currentSessionId}/messages`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        message: text
+                    })
+                });
+
+                if (!res.ok) throw new Error("API Error: " + res.status);
+
+                const data = await res.json();
+
+                if (data.response) {
+                    addMessage(data.response, 'ai');
+                }
+
+            } catch (e) {
+                console.error(e);
+                addMessage(`Error: ${e.message}`, 'system');
+            }
+        }
+
+        function addMessage(text, role) {
+            const vp = document.getElementById('viewport');
+            const div = document.createElement('div');
+            div.className = `msg ${role}`;
+
+            if (role !== 'system') {
+                div.innerHTML = `<div class="msg-bubble">${formatText(text)}</div>`;
+            } else {
+                div.innerText = text;
+            }
+
+            vp.appendChild(div);
+            vp.scrollTop = vp.scrollHeight;
+        }
+
+        function stripThinking(text) {
+            if (!text) return text;
+            let cleaned = String(text);
+            cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+            cleaned = cleaned.replace(/^(thoughts?|thinking|analysis)\s*:\s*/i, "").trim();
+            return cleaned;
+        }
+
+        function formatText(text) {
+            const cleaned = stripThinking(text);
+            return cleaned
+                .replace(/\n\n+/g, '<br><br>') // Handle paragraphs better
+                .replace(/\n/g, '<br>')
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>');
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendMessage();
+        }
+    </script>
+</body>
+
+</html>
