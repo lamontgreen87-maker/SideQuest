@@ -418,6 +418,60 @@
             border-color: rgba(0, 229, 255, 0.2);
         }
 
+        /* --- Thinking Indicator --- */
+        .thinking-indicator {
+            display: none;
+            align-self: flex-start;
+            padding: 1rem 1.5rem;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin: 0.5rem 0;
+        }
+
+        .thinking-indicator.active {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .thinking-dots {
+            display: flex;
+            gap: 0.3rem;
+        }
+
+        .thinking-dots span {
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            animation: pulse 1.4s infinite;
+        }
+
+        .thinking-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .thinking-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            60%,
+            100% {
+                opacity: 0.3;
+                transform: scale(0.8);
+            }
+
+            30% {
+                opacity: 1;
+                transform: scale(1.2);
+            }
+        }
+
         #input-area {
             padding: 2rem;
             background: var(--bg-panel);
@@ -726,6 +780,16 @@
 
             <div id="viewport">
                 <div class="msg system">Initializing Neural Link...</div>
+            </div>
+
+            <!-- Thinking Indicator -->
+            <div id="thinking-indicator" class="thinking-indicator">
+                <div class="thinking-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <span style="color: var(--text-dim); font-size: 0.9rem; margin-left: 0.5rem;">AI is thinking...</span>
             </div>
 
             <div id="input-area">
@@ -1284,6 +1348,10 @@
             addMessage(text, 'user');
             input.value = '';
 
+            // Show thinking indicator
+            const thinkingEl = document.getElementById('thinking-indicator');
+            thinkingEl.classList.add('active');
+
             try {
                 // Endpoint: POST /api/sessions/{id}/messages
                 const res = await fetch(`${STATE.serverUrl}/api/sessions/${STATE.currentSessionId}/messages`, {
@@ -1305,6 +1373,9 @@
             } catch (e) {
                 console.error(e);
                 addMessage(`Error: ${e.message}`, 'system');
+            } finally {
+                // Hide thinking indicator
+                thinkingEl.classList.remove('active');
             }
         }
 
