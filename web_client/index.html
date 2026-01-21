@@ -721,11 +721,17 @@
                 <button class="btn secondary" onclick="navTo('servers')">Switch Server</button>
             </div>
             <div
-                style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--text-dim); display: flex; justify-content: space-between; align-items: center;">
-                <span>v1.0.2</span>
-                <button onclick="location.reload(true)"
-                    style="background: none; border: none; color: var(--accent); cursor: pointer; text-decoration: underline;">Force
-                    Refresh</button>
+                style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 0.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>v1.0.3</span>
+                    <button onclick="location.reload(true)"
+                        style="background: none; border: none; color: var(--accent); cursor: pointer; text-decoration: underline;">Force
+                        Refresh</button>
+                </div>
+                <button onclick="emergencyReset()"
+                    style="background: rgba(255,0,0,0.1); border: 1px solid rgba(255,0,0,0.3); color: #ff6666; padding: 0.4rem; border-radius: 4px; cursor: pointer; font-size: 0.7rem; width: 100%;">
+                    ⚠️ Emergency Reset (Clear All Cache)
+                </button>
             </div>
         </div>
 
@@ -1267,7 +1273,8 @@
             // Register service worker for PWA
             if ('serviceWorker' in navigator) {
                 try {
-                    const registration = await navigator.serviceWorker.register('sw.js');
+                    // Cache bust the SW registration
+                    const registration = await navigator.serviceWorker.register('sw.js?v=3');
                     console.log('[PWA] Service Worker registered:', registration.scope);
                 } catch (error) {
                     console.error('[PWA] Service Worker registration failed:', error);
@@ -1344,12 +1351,30 @@
             }
         }
 
-        function saveSettings() {
-            const url = document.getElementById('server-url').value.replace(/\/$/, '');
-            STATE.serverUrl = url;
-            localStorage.setItem('server_url', url);
-            toggleSettings();
-            alert('Settings Saved');
+        async function emergencyReset() {
+            if (!confirm("This will clear all saved settings and reset the app. Continue?")) return;
+
+            // 1. Unregister all Service Workers
+            if (window.navigator && navigator.serviceWorker) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                for (let registration of registrations) {
+                    await registration.unregister();
+                }
+            }
+
+            // 2. Clear Caches
+            if (window.caches) {
+                const keys = await caches.keys();
+                for (let key of keys) {
+                    await caches.delete(key);
+                }
+            }
+
+            // 3. Clear Storage
+            localStorage.clear();
+
+            // 4. Final Reload (Hard)
+            location.href = location.href.split('?')[0] + '?reset=' + Date.now();
         }
 
         function initWeaponGrid() {
