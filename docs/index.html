@@ -713,30 +713,84 @@
         };
 
         // --- SERVER BROWSER ---
+        // --- SERVER BROWSER ---
         async function loadServerList() {
             try {
                 const res = await fetch('https://raw.githubusercontent.com/lamontgreen87-maker/SideQuest-Servers/main/servers.json');
                 const data = await res.json();
-                // Merge with saved servers (deduplicated by URL)
+
                 const remoteServers = data.servers || [];
                 const saved = STATE.savedServers || [];
 
                 // key by URL to dedupe
                 const map = new Map();
-                remoteServers.forEach(s => map.set(s.url, s));
-                saved.forEach(s => map.set(s.url, s)); // Saved overrides remote if same URL (or vice-versa, user preference)
+                remoteServers.forEach(s => {
+                    s.status = 'checking'; // Default state
+                    map.set(s.url, s);
+                });
+                saved.forEach(s => {
+                    // Preserve checking state if overwriting, or set default
+                    if (!s.status) s.status = 'checking';
+                    map.set(s.url, s);
+                });
 
-                renderServerList(Array.from(map.values()));
+                const combined = Array.from(map.values());
+                renderServerList(combined);
+
+                // Trigger health checks in background
+                checkAllServersHealth(combined);
+
             } catch (e) {
                 console.error('Failed to load servers:', e);
                 // Fallback to minimal + saved
+                STATE.savedServers.forEach(s => s.status = 'checking');
                 renderServerList(STATE.savedServers);
+                checkAllServersHealth(STATE.savedServers);
             }
+        }
+
+        async function checkAllServersHealth(servers) {
+            // Check all in parallel
+            await Promise.all(servers.map(async (server) => {
+                try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 3000); // 3s timeout
+
+                    const res = await fetch(`${server.url}/health`, {
+                        method: 'GET',
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeout);
+
+                    if (res.ok) {
+                        server.status = 'online';
+                        server.ping = 'OK';
+                    } else {
+                        server.status = 'offline';
+                    }
+                } catch (err) {
+                    server.status = 'offline';
+                }
+                // Re-render immediately to show update
+                renderServerList(servers);
+            }));
         }
 
         function renderServerList(servers) {
             const container = document.getElementById('server-list');
-            container.innerHTML = servers.map(server => `
+
+            // Sort: Online first, then Checking, then Offline
+            const sorted = [...servers].sort((a, b) => {
+                const score = s => s.status === 'online' ? 2 : (s.status === 'checking' ? 1 : 0);
+                return score(b) - score(a);
+            });
+
+            container.innerHTML = sorted.map(server => {
+                let statusIcon = '⚪'; // checking
+                if (server.status === 'online') statusIcon = '🟢';
+                if (server.status === 'offline') statusIcon = '🔴';
+
+                return `
                 <div class="card" style="padding: 1rem; cursor: pointer; border: 2px solid ${STATE.currentServer?.id === server.id ? 'var(--accent)' : 'var(--border)'};" 
                      onclick="connectToServer(${JSON.stringify(server).replace(/"/g, '&quot;')})">
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
@@ -744,8 +798,8 @@
                             <h3 style="margin: 0;">${server.name}</h3>
                             <p style="margin: 0.2rem 0; font-size: 0.85rem; color: var(--text-dim);">by ${server.owner}</p>
                         </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            ${server.status === 'online' ? '🟢' : '🔴'}
+                        <div style="display: flex; gap: 0.5rem; align-items: center;" title="${server.status}">
+                            ${statusIcon}
                             ${server.passwordProtected ? '🔒' : ''}
                         </div>
                     </div>
@@ -755,7 +809,7 @@
                         ${server.tags.map(tag => `<span style="padding: 0.2rem 0.6rem; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 0.8rem;">${tag}</span>`).join('')}
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         async function connectToServer(server) {
