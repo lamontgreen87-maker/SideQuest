@@ -1126,6 +1126,16 @@
         function renderServerList(servers) {
             const container = document.getElementById('server-list');
 
+            if (!servers || servers.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align:center; padding:2rem; color:var(--text-dim);">
+                        <p>No servers found in registry.</p>
+                        <button class="btn secondary" style="margin-top:1rem" onclick="loadServerList()">Refresh Registry</button>
+                    </div>
+                `;
+                return;
+            }
+
             // Sort: Online first, then Checking, then Offline
             const sorted = [...servers].sort((a, b) => {
                 const score = s => s.status === 'online' ? 2 : (s.status === 'checking' ? 1 : 0);
@@ -1137,9 +1147,12 @@
                 if (server.status === 'online') statusIcon = '🟢';
                 if (server.status === 'offline') statusIcon = '🔴';
 
+                // Safe stringification for onclick
+                const serverJson = btoa(JSON.stringify(server));
+
                 return `
                 <div class="card" style="padding: 1rem; cursor: pointer; border: 2px solid ${STATE.currentServer?.id === server.id ? 'var(--accent)' : 'var(--border)'};" 
-                     onclick="connectToServer(${JSON.stringify(server).replace(/"/g, '&quot;')})">
+                     onclick="connectToServerBase64('${serverJson}')">
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
                         <div>
                             <h3 style="margin: 0;">${server.name}</h3>
@@ -1153,10 +1166,20 @@
                     <p style="margin: 0.5rem 0 1rem; color: var(--text-dim); font-size: 0.9rem;">${server.description}</p>
                     <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                         <span style="padding: 0.2rem 0.6rem; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 0.8rem;">${server.pricing}</span>
-                        ${server.tags.map(tag => `<span style="padding: 0.2rem 0.6rem; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 0.8rem;">${tag}</span>`).join('')}
+                        ${(server.tags || []).map(tag => `<span style="padding: 0.2rem 0.6rem; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 0.8rem;">${tag}</span>`).join('')}
                     </div>
                 </div>
             `}).join('');
+        }
+
+        function connectToServerBase64(b64) {
+            try {
+                const server = JSON.parse(atob(b64));
+                connectToServer(server);
+            } catch (e) {
+                console.error('Failed to parse server data:', e);
+                alert('Connection failed: Malformed server data');
+            }
         }
 
         async function connectToServer(server) {
